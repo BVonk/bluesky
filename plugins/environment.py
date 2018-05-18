@@ -6,7 +6,7 @@ from bluesky.tools.misc import degto180
 from bluesky import traf
 from bluesky import navdb
 from bluesky.tools.aero import nm, g0
-from vierd import ETA
+from vierd3 import ETA
 
 
 
@@ -99,7 +99,8 @@ def init_plugin():
 #        stack.stack('ECHO Deleted intruder '+intruder)
 
 def update():
-    train() if train_phase else test()
+#    train() if train_phase else test()
+    test()
 
 def train():
     eventmanager.update()
@@ -121,7 +122,7 @@ def train():
 def test():
     eventmanager.update()
 
-
+    print('ETA {} wp {}'.format(ETA(agent.acidx), traf.ap.route[0].wpname[traf.ap.route[0].iactwp]))
     for i in eventmanager.events:
         if env.actnum == 0:
             agent.sta = ETA(agent.acidx) + random.random() * 100
@@ -172,10 +173,10 @@ class Env:
                             traf.ap.route[self.acidx].wplon[-2])
         t = agent.sta - ETA(agent.acidx)
         print('STA {}, ETA {}, t {}'.format(agent.sta, ETA(agent.acidx), t))
-        hdg_ref = abs(degto180(qdr - traf.hdg[agent.acidx]))
+        hdg_rel = degto180(qdr - traf.hdg[agent.acidx])
 #        self.state = np.array([dist, t, hdg_ref,
 #                               traf.tas[agent.acidx]])
-        self.state = np.array([dist, t, hdg_ref/180.])
+        self.state = np.array([dist, t, hdg_rel/180.])
         # Check episode termination
         if dist<1 or agent.sta-sim.simt<-60:
             if agent.epsilon > agent.epsilon_min:
@@ -289,6 +290,20 @@ class DQNAgent:
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
+
+
+    def calc_turn_wp(self, delta_qdr):
+        latA = traf.lat[self.acidx]
+        lonA = traf.lon[self.acidx]
+        turnrad = traf.tas[self.acidx]**2 / (np.maximum(0.01, np.tan(traf.bank[self.acidx])) * g0) # [m]
+
+        #Turn right so add bearing
+#        qdr = traf.qdr[self.acidx] + 90
+
+        # Centre of turning circle
+        latR, lonR = qdrpos(latA, lonA, traf.hdg[self.acidx] + 90, turnrad/nm) # [deg, deg]
+        # Rotate vector
+        latB, lonB = qdrpos(latR, lonR, traf.hdg[self.acidx] - 90 + delta_qdr, turnrad/nm) # [deg, deg]
 
 
     def act1(self):
