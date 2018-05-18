@@ -1,9 +1,16 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri May 18 11:49:49 2018
+
+@author: Bart
+"""
+
 """ BlueSky plugin template. The text you put here will be visible
     in BlueSky as the description of your plugin. """
 # Import the global bluesky objects. Uncomment the ones you need
 from bluesky import stack, traf, sim  #, settings, navdb, traf, sim, scr, tools
-from bluesky.tools.geo import qdrdist
-from bluesky.tools.aero import nm, vcas2tas
+from bluesky.tools.geo import qdrdist, qdrpos
+from bluesky.tools.aero import nm, vcas2tas, g0
 from bluesky.tools.misc import degto180
 import numpy as np
 #from bluesky.sim import simt
@@ -14,6 +21,9 @@ def init_plugin():
 
     # Addtional initilisation code
 
+    global wplon, wplat
+    wplon =1
+    wplat = 2
     # Configuration parameters
     config = {
         # The name of your plugin
@@ -75,7 +85,8 @@ def update():
 #    print(traf.ap.route[0].wpspd)
 #    print(traf.ap.route[0].wpflyby)
 #    print()
-    ETA()
+    t = ETA(0)
+    print("ETA {}:{}".format(int(np.floor(t/60)),t%60))
 #        self.wpname = []
 #        self.wptype = []
 #        self.wplat  = []
@@ -131,8 +142,51 @@ def ETA(acidx):
             lat[wpidx] = traf.ap.route[acidx].wplat[wpidx]          # [deg]
             lon[wpidx] = traf.ap.route[acidx].wplon[wpidx]          #[deg]
 
+
             qdr, s[wpidx] = qdrdist(lat[wpidx-1], lon[wpidx-1], lat[wpidx], lon[wpidx]) # [nm]
             s[wpidx] *= nm # [m]
+
+
+            # Correct flying distance if aircraft heading and waypoint bearing
+            # do not match.
+            if wpidx == iactwp:
+                print("CORRECTION")
+
+                hdg_rel = degto180(qdr - traf.hdg[acidx])
+                print("s_initial {}, hdg {}, qdr {}, hdg_rel {}".format(s[wpidx],traf.hdg[acidx], qdr, hdg_rel))
+                delta_qdr = hdg_rel
+                correct = False
+                i = 0
+                while abs(hdg_rel) > 1:
+                    # Compute intermediate waypoint
+                    correct = True
+                    wplat, wplon = calc_turn_wp(delta_qdr, acidx)
+
+                    # Compute new hdg_rel
+                    hdg = (traf.hdg[acidx] + delta_qdr)%360
+#                    print("Heading after turn {}".format(hdg))
+                    qdr, dist = qdrdist(wplat, wplon, lat[wpidx], lon[wpidx])
+
+                    hdg_rel = degto180(qdr - hdg)
+                    delta_qdr += hdg_rel/2
+                    i = i+1
+                    print("hdg {}, qdr{}, hdg_rel {}".format(hdg, qdr, hdg_rel))
+#                    print("intheloop hdg {}".format(hdg_rel))
+                    if i == 5:
+                        break
+
+
+                # Compute distance correction
+                if correct:
+                    print("wplat {}, wplon {}".format(wplat,wplon))
+                    turnrad = traf.tas[acidx]**2 / (np.maximum(0.01, np.tan(traf.bank[acidx])) * g0)
+                    turndist = np.pi * turnrad * abs(delta_qdr)/180.
+                    s[wpidx] = turndist + dist*nm
+                    print("s_corrected {}, dist {}, turndist {}\n".format(s[wpidx], dist, turndist))
+                    f = open('output/coord.csv', 'a')
+                    f.write("[{},{},{}];[{},{},{}]\n".format(traf.lat[acidx], wplat, lat[wpidx], traf.lon[acidx], wplon, lon[wpidx]))
+                    f.close()
+                    stack.stack("DEFWPT XXX {}, {}".format(wplat, wplon))
 
             # check for valid speed, if no speed is given take the speed
             # already in memory from previous waypoint.
@@ -145,7 +199,7 @@ def ETA(acidx):
                           traf.ap.route[acidx].wpalt[wpidx]).item() # [m/s]
 
 
-            # Compute distance correction for flyby turns.
+            # Compute distance correction for flyby turns if it is not the destination
             if wpidx < nwp - 2:
                 #bearing of leg --> Second leg.
                 nextqdr, nexts = qdrdist(lat[wpidx], lon[wpidx], lat[wpidx+1], lon[wpidx+1]) #[deg, nm]
@@ -156,7 +210,9 @@ def ETA(acidx):
 
                 dsturn[wpidx] = dist2turn - distofturn
                 turndist[wpidx] = dist2turn
+#    print("s {}".format(s))
 
+    # Correct for QDR.
 
     # Now loop to fill the VNAV constraints. A second loop is necessary
     # Because the complete speed profile and turn profile is required.
@@ -211,7 +267,7 @@ def ETA(acidx):
             s_ax = 0 # [m]
             t_acc = 0
 
-        s_nom = s_leg - s_ax - dist2vs[wpidx] # [m] Distance of normal flight
+        s_nom = s_leg - s_ax - dist2vs[wpidx] # [m] Distance of steady flight
         # Check if acceleration distance and start of descent overlap
         if s_nom < 0:
             t_vs = 0
@@ -245,7 +301,7 @@ def ETA(acidx):
                 t_vs = 0
 
             t_leg = t_nom + t_acc + t_vs
-        t_total+=t_leg
+        t_total+=t_leg[0]
 
 
     # Debug print statements
@@ -267,7 +323,27 @@ def ETA(acidx):
 #    print('eta', sim.simt + t_total)
 #    print(' ')
 #    print(t_total)
-    return t_total[0] + sim.simt
+    return t_total + sim.simt
+
+def calc_turn_wp(delta_qdr, acidx):
+    latA = traf.lat[acidx]
+    lonA = traf.lon[acidx]
+    turnrad = traf.tas[acidx]**2 / (np.maximum(0.01, np.tan(traf.bank[acidx])) * g0) # [m]
+
+    # Turn left
+    if delta_qdr > 0:
+        # Compute centre of turning circle
+        latR, lonR = qdrpos(latA, lonA, traf.hdg[acidx] + 90, turnrad/nm) # [deg, deg]
+        # Rotate vector position vector along turning circle
+        latB, lonB = qdrpos(latR, lonR, traf.hdg[acidx] - 90 + abs(delta_qdr), turnrad/nm) # [deg, deg]
+
+    else:
+        # Compute centre of turning circle
+        latR, lonR = qdrpos(latA, lonA, traf.hdg[acidx] - 90, turnrad/nm) # [deg, deg]
+        # Rotate vector
+        latB, lonB = qdrpos(latR, lonR, traf.hdg[acidx] + 90 - abs(delta_qdr), turnrad/nm) # [deg, deg]
+    print("Turnpoint {} {}".format(latR, lonR))
+    return latB, lonB
 
 
 def abc(a, b, c):
