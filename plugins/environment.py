@@ -6,10 +6,11 @@ from bluesky.tools.misc import degto180
 from bluesky import traf
 from bluesky import navdb
 from bluesky.tools.aero import nm, g0
-from vierd3 import ETA
+
+from vierd import ETA
 
 
-
+import pickle
 import random
 import numpy as np
 import os
@@ -24,9 +25,10 @@ def init_plugin():
     # Addtional initilisation code
     # Pan to waypoint with fixed zoom level and create a random aircraft.
     # Configuration parameters
-    global env, agent, eventmanager, state_size, train_phase
+    global env, agent, eventmanager, state_size, train_phase, model_fname
     state_size = 3
-    train_phase = False
+    train_phase = True
+    model_fname = ''
     env = Env()
     agent = DQNAgent(state_size,3)
     eventmanager = Eventmanager()
@@ -99,8 +101,8 @@ def init_plugin():
 #        stack.stack('ECHO Deleted intruder '+intruder)
 
 def update():
-#    train() if train_phase else test()
-    test()
+    train() if train_phase else test()
+#    test()
 
 def train():
     eventmanager.update()
@@ -122,7 +124,7 @@ def train():
 def test():
     eventmanager.update()
 
-    print('ETA {} wp {}'.format(ETA(agent.acidx), traf.ap.route[0].wpname[traf.ap.route[0].iactwp]))
+#    print('ETA {} wp {}'.format(ETA(agent.acidx), traf.ap.route[0].wpname[traf.ap.route[0].iactwp]))
     for i in eventmanager.events:
         if env.actnum == 0:
             agent.sta = ETA(agent.acidx) + random.random() * 100
@@ -132,6 +134,12 @@ def test():
         if not done:
             agent.act_test(next_state)
 
+        f = open(agent.testname, 'a')
+        f.write("{},{},{},{},{},{},{},{},{},{}\n".format(env.ep, env.actnum, env.reward, env.state[0], env.state[1], env.state[2], agent.sta, sim.simt, traf.lat[env.acidx], traf.lon[env.acidx]))
+        f.close()
+
+        if env.ep>25:
+            sim.stop()
 
 
 def preupdate():
@@ -187,7 +195,7 @@ class Env:
         reward = self.gen_reward()
         print('State {}'.format(self.state))
         print('Reward {}, epsilon {}'.format(reward, agent.epsilon))
-
+        self.log()
 
         return self.state, reward, self.done, prev_state
 
@@ -216,12 +224,11 @@ class Env:
 
 
     def reset(self):
-        if self.ep%5 == 0 and self.ep!=0 and train_phase:
-            agent.save("./output/model{0:05}.hdf5".format(self.ep))
+        if self.ep%25 == 0 and self.ep!=0 and train_phase:
+            agent.save("./output/model{0:05}".format(self.ep))
             print("Saving model after {} episodes".format(self.ep))
 
-        if self.ep>0:
-            self.log()
+
         stack.stack('open ./scenario/4d.SCN')
         self.actnum = 0
         self.ep += 1
@@ -236,7 +243,7 @@ class Env:
         hdg_ref = 60.
         hdg_diff = (degto180(hdg_ref - hdg))
         f = open(self.fname, 'a')
-        f.write("{};{};{};{};{};{};{}\n".format(self.ep, self.reward, dist, hdg_diff, t, agent.epsilon, agent.sta))
+        f.write("{};{};{};{};{};{};{};{};{};{};{}\n".format(self.ep, self.actnum, self.reward, dist, t, hdg_diff, agent.sta, sim.simt, traf.lat[self.acidx], traf.lon[self.acidx], agent.epsilon))
         f.close()
 
 
@@ -248,7 +255,7 @@ class Env:
 class DQNAgent:
     def __init__(self, state_size, action_size):
         self.train = True
-        self.fname = './output/run_0.4/model01000.HDF5' #'model00005.hdf5'
+        self.fname = ''#'output/model00700'
         self.acidx = 0
         self.state_size = state_size
         self.action_size = action_size
@@ -271,6 +278,10 @@ class DQNAgent:
 #
         elif not train_phase:
             self.load(self.fname)
+            self.testname = "output/test{}.csv".format(self.fname[-5:])
+            f = open(self.testname, 'w')
+            f.write("episode,step,reward,state1,state2,state3,STA,t,lat,lon\n")
+            f.close()
 
         self.targetmodel = self.model
         print(self.model.summary())
@@ -392,12 +403,12 @@ class DQNAgent:
 
             if not done:
                 # Predict the future discounted reward
-                target = reward + self.gamma * np.amax(self.model.predict(next_state.reshape((1,agent.state_size)))[0])
+                target = reward + self.gamma * np.amax(self.targetmodel.predict(next_state.reshape((1,agent.state_size)))[0])
 
             # make the agent to approximately map
             # the current state to future discounted reward
             # We'll call that target_f
-            target_f = self.targetmodel.predict(state.reshape((1,self.state_size)))
+            target_f = self.model.predict(state.reshape((1,self.state_size)))
             target_f[0][action] = target
 
             # Train the Neural Net with the state and target_f
@@ -416,14 +427,17 @@ class DQNAgent:
 
 
     def load(self, name):
-        print("Loading weights from {}".format(self.fname))
-        self.model.load_weights(name)
-        env.ep = int(self.fname[-10:-5])
-        self.epsilon = max(self.epsilon_min, self.epsilon - env.ep * 1000/0.9)
+        print("Loading weights from {}".format(name))
+        self.model.load_weights(name + '.hdf5')
+        if train_phase:
+            env.ep = int(self.fname[-5:])
+            self.epsilon = max(self.epsilon_min, self.epsilon - env.ep * 1000/0.9)
+            self.memory = pickle.load(open(name + '.p','rb'))
 
 
     def save(self, name):
-        self.model.save_weights(name)
+        self.model.save_weights(name + '.hdf5')
+        pickle.dump(self.memory, open(name + '.p', 'wb'))
 
 
 class Eventmanager():
