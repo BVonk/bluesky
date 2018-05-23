@@ -150,10 +150,10 @@ def ETA(acidx):
             # Correct flying distance if aircraft heading and waypoint bearing
             # do not match.
             if wpidx == iactwp:
-                print("CORRECTION")
+#                print("CORRECTION")
 
                 hdg_rel = degto180(qdr - traf.hdg[acidx])
-                print("s_initial {}, hdg {}, qdr {}, hdg_rel {}".format(s[wpidx],traf.hdg[acidx], qdr, hdg_rel))
+#                print("s_initial {}, hdg {}, qdr {}, hdg_rel {}".format(s[wpidx],traf.hdg[acidx], qdr, hdg_rel))
                 delta_qdr = hdg_rel
                 correct = False
                 i = 0
@@ -170,7 +170,7 @@ def ETA(acidx):
                     hdg_rel = degto180(qdr - hdg)
                     delta_qdr += hdg_rel/2
                     i = i+1
-                    print("hdg {}, qdr{}, hdg_rel {}".format(hdg, qdr, hdg_rel))
+#                    print("hdg {}, qdr{}, hdg_rel {}".format(hdg, qdr, hdg_rel))
 #                    print("intheloop hdg {}".format(hdg_rel))
                     if i == 5:
                         break
@@ -178,15 +178,15 @@ def ETA(acidx):
 
                 # Compute distance correction
                 if correct:
-                    print("wplat {}, wplon {}".format(wplat,wplon))
+#                    print("wplat {}, wplon {}".format(wplat,wplon))
                     turnrad = traf.tas[acidx]**2 / (np.maximum(0.01, np.tan(traf.bank[acidx])) * g0)
                     turndist = np.pi * turnrad * abs(delta_qdr)/180.
                     s[wpidx] = turndist + dist*nm
-                    print("s_corrected {}, dist {}, turndist {}\n".format(s[wpidx], dist, turndist))
-                    f = open('output/coord.csv', 'a')
-                    f.write("[{},{},{}];[{},{},{}]\n".format(traf.lat[acidx], wplat, lat[wpidx], traf.lon[acidx], wplon, lon[wpidx]))
-                    f.close()
-                    stack.stack("DEFWPT XXX {}, {}".format(wplat, wplon))
+#                    print("s_corrected {}, dist {}, turndist {}\n".format(s[wpidx], dist, turndist))
+#                    f = open('output/coord.csv', 'a')
+#                    f.write("[{},{},{}];[{},{},{}]\n".format(traf.lat[acidx], wplat, lat[wpidx], traf.lon[acidx], wplon, lon[wpidx]))
+#                    f.close()
+#                    stack.stack("DEFWPT XXX {}, {}".format(wplat, wplon))
 
             # check for valid speed, if no speed is given take the speed
             # already in memory from previous waypoint.
@@ -342,7 +342,6 @@ def calc_turn_wp(delta_qdr, acidx):
         latR, lonR = qdrpos(latA, lonA, traf.hdg[acidx] - 90, turnrad/nm) # [deg, deg]
         # Rotate vector
         latB, lonB = qdrpos(latR, lonR, traf.hdg[acidx] + 90 - abs(delta_qdr), turnrad/nm) # [deg, deg]
-    print("Turnpoint {} {}".format(latR, lonR))
     return latB, lonB
 
 
