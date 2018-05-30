@@ -207,11 +207,11 @@ class Env:
         hdg_ref = 60.
 
         a_dist = -0.3
-        a_t = -0.2
+        a_t = -0.1
         a_hdg = -0.07
 
-        dist_rew = 5 + a_dist * dist
-        t_rew = 10 + a_t * abs(t)
+        dist_rew = 0#5 + a_dist * dist
+        t_rew = 6 + a_t * abs(t)
 
         if self.done:
             hdg_rew = a_hdg * abs(degto180(hdg_ref - hdg))
@@ -290,10 +290,12 @@ class DQNAgent:
         # Neural Net for Deep-Q learning Model
         model = Sequential()
         model.add(Dense(24, input_dim=self.state_size, activation='relu'))
+        model.add(Dropout(0.15))
         model.add(Dense(24, activation='relu'))
+        model.add(Dropout(0.15))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(loss='mse',
-                      optimizer=RMSprop(lr=self.learning_rate)
+                      optimizer=RMSprop(lr=self.learning_rate, clipvalue=0.5)
                       )
         print(model.summary())
         return model
