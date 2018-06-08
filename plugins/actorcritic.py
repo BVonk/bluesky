@@ -14,10 +14,13 @@ import random
 import numpy as np
 import os
 from collections import deque
-from keras.models import Sequential
-from keras.layers import Dense, Dropout
+from keras.models import Sequential, Model
+from keras.layers import Dense, Dropout, Input
 from keras.optimizers import Adam, RMSprop
-from keras import backend as K
+from keras.layers.merge import Add, Multiply
+import keras.backend as K
+import tensorflow as tf
+
 
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
@@ -25,17 +28,22 @@ def init_plugin():
     # Addtional initilisation code
     # Pan to waypoint with fixed zoom level and create a random aircraft.
     # Configuration parameters
-    global env, agent, eventmanager, state_size, train_phase, model_name
+    global env, agent, eventmanager, state_size, train_phase, model_fname
     state_size = 3
+    action_size = 3
     train_phase = True
     model_fname = ''
     env = Env()
-    agent = DuelingDQNAgent(state_size,3)
+
+    sess = tf.Session()
+
+    K.set_session(sess)
+    agent = ActorCritic(state_size,action_size, sess)
     eventmanager = Eventmanager()
 
     config = {
         # The name of your plugin
-        'plugin_name':     'env',
+        'plugin_name':     'AC',
 
         # The type of this plugin. For now, only simulation plugins are possible.
         'plugin_type':     'sim',
@@ -112,12 +120,13 @@ def train():
         if env.actnum == 0:
             agent.sta = ETA(agent.acidx) + random.random() * 100
         next_state, reward, done, prev_state = env.step()
-
+        prev_state = np.reshape(prev_state, [1, agent.state_size])
         next_state = np.reshape(next_state, [1, agent.state_size])
+        print("prevstateshape ", prev_state.shape)
         if env.actnum>0:
             agent.remember(prev_state, agent.action, reward, next_state, done)
         if len(agent.memory) > agent.batch_size:
-            agent.replay(agent.batch_size)
+            agent.train()
         if not done:
             agent.act(next_state)
 
@@ -196,9 +205,7 @@ class Env:
         reward = self.gen_reward()
         print('State {}'.format(self.state))
         print('Reward {}, epsilon {}'.format(reward, agent.epsilon))
-        
-        if train_phase:
-            self.log()
+        self.log()
 
         return self.state, reward, self.done, prev_state
 
@@ -209,12 +216,12 @@ class Env:
         hdg = self.state[2]
         hdg_ref = 60.
 
-        a_dist = -0.2
-        a_t = -0.1
+        a_dist = -0.3
+        a_t = -0.2
         a_hdg = -0.07
 
-        dist_rew = 2 + a_dist * dist
-        t_rew = 6 + a_t * abs(t)
+        dist_rew = 5 + a_dist * dist
+        t_rew = 10 + a_t * abs(t)
 
         if self.done:
             hdg_rew = a_hdg * abs(degto180(hdg_ref - hdg))
@@ -254,18 +261,226 @@ class Env:
         # Set new heading reference of the aircraft
         stack.stack(traf.id[self.acidx] + ' HDG ' + str(action))
 
-
-class DQNAgent:
-    def __init__(self, state_size, action_size):
+class ActorCritic:
+    def __init__(self, state_size, action_size, sess):
         self.acidx = 0
         self.state_size = state_size
         self.action_size = action_size
-        self.memory = deque(maxlen=100000)
+        self.sess = sess
+        self.learning_rate = 0.001
+        self.epsilon = 1.0
+        self.epsilon_decay = .995
+        self.gamma = .95
+        self.tau   = .125
+        self.actions = [self.act1, self.act4, self.act5]
+        self.sta = 0
+        self.action = 0
+        self.batch_size = 32
+        self.trainsteps = 0
+        self.c = 1000
+
+
+        # Actor model
+        self.memory = deque(maxlen=2000)
+        self.actor_state_input, self.actor_model = self.create_actor_model()
+        _, self.target_actor_model = self.create_actor_model()
+
+        self.actor_critic_grad = tf.placeholder(tf.float32, [None, self.action_size])
+
+        actor_model_weights = self.actor_model.trainable_weights
+        self.actor_grads = tf.gradients(self.actor_model.output,
+                                        actor_model_weights,
+                                        -self.actor_critic_grad)
+        grads = zip(self.actor_grads, actor_model_weights)
+
+        self.optimize = tf.train.AdamOptimizer(self.learning_rate).apply_gradients(grads)
+
+        # Critic model
+        self.critic_state_input, self.critic_action_input, \
+        self.critic_model = self.create_critic_model()
+        _, _, self.target_critic_model = self.create_critic_model()
+
+        self.critic_grads = tf.gradients(self.critic_model.output,
+                                         self.critic_action_input)
+
+        self.sess.run(tf.initialize_all_variables())
+
+
+    def create_actor_model(self):
+        state_input = Input(shape=(self.state_size,))
+        h1 = Dense(24, activation='relu')(state_input)
+        h2 = Dense(48, activation='relu')(h1)
+        h3 = Dense(24, activation='relu')(h2)
+        output = Dense(self.action_size, activation='relu')(h3)
+
+        model = Model(input=state_input, output=output)
+        adam = Adam(lr=0.001)
+        model.compile(loss="mse", optimizer=adam)
+        return state_input, model
+
+    def create_critic_model(self):
+        state_input = Input(shape=(self.state_size,))
+        state_h1 = Dense(24, activation='relu')(state_input)
+        state_h2 = Dense(48)(state_h1)
+
+        action_input = Input(shape=(self.action_size,))
+        action_h1 = Dense(48)(action_input)
+
+        merged = Add()([state_h2, action_h1])
+        merged_h1 = Dense(24, activation='relu')(merged)
+        output = Dense(1, activation='relu')(merged_h1)
+        model = Model(input=[state_input, action_input], output=output)
+
+        adam = Adam(lr=0.001)
+        model.compile(loss="mse", optimizer=adam)
+        model.summary()
+        return state_input, action_input, model
+
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.append((state, action, reward, next_state, done))
+
+
+    def _train_actor(self, samples):
+        for sample in samples:
+            state, action, reward, next_state, _ = sample
+            predicted_action = self.actor_model.predict(state)
+            grads = self.sess.run(self.critic_grads, feed_dict={
+                    self.critic_state_input: state,
+                    self.critic_action_input: predicted_action
+                    })[0]
+
+            self.sess.run(self.optimize, feed_dicht={
+                    self.actor_state_input: state,
+                    self.actor_critic_grad: grads})
+
+    def _train_critic(self, samples):
+        for sample in samples:
+            state, action, reward, next_state, done = sample
+            print("state shape ", state.shape,next_state)
+            if not done:
+                target_action = self.target_actor_model.predict(next_state)
+                future_reward = self.target_critic_model.predict(
+                        [next_state, target_action])[0][0]
+                reward += self.gamma * future_reward
+            self.critic_model.fit([state, np.array(action)], reward, verbose=0)
+
+    def train(self):
+        if len(self.memory) < self.batch_size:
+            return
+
+        samples = random.sample(self.memory, self.batch_size)
+        self._train_critic(samples)
+        self._train_actor(samples)
+        self.trainsteps += 1
+
+        if self.train_steps%self.c == 0:
+            self.update_target()
+
+    def _update_actor_target(self):
+        actor_model_weights = self.actor_model.get_weights()
+        actor_target_weights = self.target_critic_model.get_weights()
+
+        for i in range(len(actor_target_weights)):
+            actor_target_weights[i] = actor_model_weights[i]
+        self.target_critic_model.set_weights(actor_target_weights)
+
+    def _update_critic_target(self):
+        critic_model_weights = self.critic_model.get_weights()
+        critic_target_weights = self.critic_target_model.get_weights()
+
+        for i in range(len(critic_target_weights)):
+            critic_target_weights[i] = critic_model_weights[i]
+        self.critic_target_model.set_weights(critic_target_weights)
+
+    def update_target(self):
+        self._update_actor_target()
+        self._update_critic_target()
+
+
+
+    def act1(self):
+        # Compute 15 degree turn left waypoint.
+        # Use current speed to compute waypoint.
+
+        dqdr = 15
+        latA = traf.lat[self.acidx]
+        lonA = traf.lon[self.acidx]
+        turnrad = traf.tas[self.acidx]**2 / (np.maximum(0.01, np.tan(traf.bank[self.acidx])) * g0) # [m]
+
+        #Turn right so add bearing
+#        qdr = traf.qdr[self.acidx] + 90
+
+        latR, lonR = qdrpos(latA, lonA, traf.hdg[self.acidx] + 90, turnrad/nm) # [deg, deg]
+        # Rotate vector
+        latB, lonB = qdrpos(latR, lonR, traf.hdg[self.acidx] - 90 + dqdr, turnrad/nm) # [deg, deg]
+        cmd = "{} BEFORE {} ADDWPT '{},{}'".format(traf.id[self.acidx], traf.ap.route[0].wpname[-2], latB, lonB)
+        stack.stack(cmd)
+
+
+    def act2(self):
+        pass
+
+
+    def act3(self):
+        pass
+
+
+    def act4(self):
+        # Compute 15 degree turn left waypoint.
+        # Use current speed to compute waypoint.
+
+        latA = traf.lat[self.acidx]
+        lonA = traf.lon[self.acidx]
+
+        latB, lonB = qdrpos(latA, lonA, traf.hdg[self.acidx], 0.25)
+        cmd = "{} BEFORE {} ADDWPT '{},{}'".format(traf.id[self.acidx], traf.ap.route[0].wpname[-2], latB, lonB)
+        stack.stack(cmd)
+
+
+    def act5(self):
+        # Compute 15 degree turn left waypoint.
+        # Use current speed to compute waypoint.
+        dqdr = 15
+        latA = traf.lat[self.acidx]
+        lonA = traf.lon[self.acidx]
+        turnrad = traf.tas[self.acidx]**2 / (np.maximum(0.01, np.tan(traf.bank[self.acidx])) * g0) # [m]
+
+        #Turn right so add bearing
+#        qdr = traf.qdr[self.acidx] + 90
+
+        latR, lonR = qdrpos(latA, lonA, traf.hdg[self.acidx] - 90, turnrad/nm) # [deg, deg]
+        # Rotate vector
+        latB, lonB = qdrpos(latR, lonR, traf.hdg[self.acidx] + 90 - dqdr, turnrad/nm) # [deg, deg]
+        cmd = "{} BEFORE {} ADDWPT '{},{}'".format(traf.id[self.acidx], traf.ap.route[0].wpname[-2], latB, lonB)
+        stack.stack(cmd)
+
+
+    def act(self, state):
+        if np.random.rand() <= self.epsilon:
+            # The agent acts randomly
+            agent.action = random.choice(np.arange(0, self.action_size))
+
+        else:
+            act_values = self.model.predict(env.state.reshape((1,agent.state_size)))
+            print('episode {}, Qvalues {}'.format(env.ep, act_values[0]))
+            self.action = np.argmax(act_values[0])
+
+        # Pick the action with the highest Q-value
+        self.actions[self.action]()
+
+
+class DQNAgent:
+    def __init__(self, state_size, action_size):
+        self.fname = 'output/run_0.6/model00600'
+        self.acidx = 0
+        self.state_size = state_size
+        self.action_size = action_size
+        self.memory = deque(maxlen=10000)
         self.gamma = 0.98    # discount rate
         self.epsilon = 1.0  # exploration rate
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.9954
-        self.learning_rate = 0.0001
+        self.learning_rate = 0.001
         self.batch_size = 32
         self.done = False
         self.sta = 0
@@ -291,12 +506,10 @@ class DQNAgent:
         # Neural Net for Deep-Q learning Model
         model = Sequential()
         model.add(Dense(24, input_dim=self.state_size, activation='relu'))
-        model.add(Dropout(0.15))
         model.add(Dense(24, activation='relu'))
-        model.add(Dropout(0.15))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(loss='mse',
-                      optimizer=RMSprop(lr=self.learning_rate, clipvalue=1.0)
+                      optimizer=RMSprop(lr=self.learning_rate)
                       )
         print(model.summary())
         return model
@@ -420,7 +633,7 @@ class DQNAgent:
             self.model.fit(state.reshape((1,agent.state_size)), target_f, epochs=1, verbose=0)
 
         if self.replaysteps%c == 0:
-            self.targetmodel.set_weights(self.model.get_weights())
+            self.targetmodel = self.model
 
 
 #        if self.epsilon > self.epsilon_min:
