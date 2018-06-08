@@ -16,8 +16,9 @@ import numpy as np
 import os
 from collections import deque
 from keras.models import Sequential
-from keras.layers import Dense
+from keras.layers import Dense, Dropout
 from keras.optimizers import Adam, RMSprop
+from keras import backend as K
 
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
@@ -25,10 +26,10 @@ def init_plugin():
     # Addtional initilisation code
     # Pan to waypoint with fixed zoom level and create a random aircraft.
     # Configuration parameters
-    global env, agent, eventmanager, state_size, train_phase, model_fname
+    global env, agent, eventmanager, state_size, train_phase, model_name
     state_size = 3
-    train_phase = True
-    model_fname = ''
+    train_phase = False
+    model_name = 'output/model02000'
     env = Env()
     agent = DQNAgent(state_size,3)
     eventmanager = Eventmanager()
@@ -195,7 +196,9 @@ class Env:
         reward = self.gen_reward()
         print('State {}'.format(self.state))
         print('Reward {}, epsilon {}'.format(reward, agent.epsilon))
-        self.log()
+        
+        if train_phase:
+            self.log()
 
         return self.state, reward, self.done, prev_state
 
@@ -206,11 +209,11 @@ class Env:
         hdg = self.state[2]
         hdg_ref = 60.
 
-        a_dist = -0.3
+        a_dist = -0.2
         a_t = -0.1
         a_hdg = -0.07
 
-        dist_rew = 0#5 + a_dist * dist
+        dist_rew = 2 + a_dist * dist
         t_rew = 6 + a_t * abs(t)
 
         if self.done:
@@ -255,16 +258,16 @@ class Env:
 class DQNAgent:
     def __init__(self, state_size, action_size):
         self.train = True
-        self.fname = ''#'output/model00700'
+        self.fname = model_name#'output/model01000'
         self.acidx = 0
         self.state_size = state_size
         self.action_size = action_size
-        self.memory = deque(maxlen=10000)
+        self.memory = deque(maxlen=100000)
         self.gamma = 0.98    # discount rate
         self.epsilon = 1.0  # exploration rate
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.9954
-        self.learning_rate = 0.0005
+        self.learning_rate = 0.0001
         self.batch_size = 32
         self.done = False
         self.sta = 0
@@ -295,7 +298,7 @@ class DQNAgent:
         model.add(Dropout(0.15))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(loss='mse',
-                      optimizer=RMSprop(lr=self.learning_rate, clipvalue=0.5)
+                      optimizer=RMSprop(lr=self.learning_rate, clipvalue=1.0)
                       )
         print(model.summary())
         return model
@@ -419,7 +422,7 @@ class DQNAgent:
             self.model.fit(state.reshape((1,agent.state_size)), target_f, epochs=1, verbose=0)
 
         if self.replaysteps%c == 0:
-            self.targetmodel = self.model
+            self.targetmodel.set_weights(self.model.get_weights())
 
 
 #        if self.epsilon > self.epsilon_min:
