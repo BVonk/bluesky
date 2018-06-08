@@ -38,8 +38,8 @@ def init_plugin():
     global env, agent, eventmanager, state_size, train_phase, model_fname
     state_size = 3
     action_size = 3
-    train_phase = False
-    model_fname = 'output/model00150'
+    train_phase = True
+    model_fname = ''#'output/model00150'
     env = Env()
 
     sess = tf.Session()
@@ -203,7 +203,7 @@ class Env:
         self.state = np.array([dist, t, hdg_rel/180.])
 
         # Check episode termination
-        if dist<1 or agent.sta-sim.simt<-60 or t<-20:
+        if dist<1 or agent.sta-sim.simt<-60 or t<-100:
             if agent.epsilon > agent.epsilon_min:
                 agent.epsilon -= agent.epsilon_decay
             self.done = True
@@ -501,7 +501,7 @@ class DuelingDQNAgent:
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.9/900
         self.learning_rate = 0.001
-        self.clipvalue = 1.
+        self.clipvalue = 0.5
         self.batch_size = 32
         self.done = False
         self.sta = 0
@@ -684,15 +684,19 @@ class DuelingDQNAgent:
     def load(self, name):
         print("Loading weights from {}".format(name))
         self.model.load_weights(name + '.hdf5')
+
         if train_phase:
             env.ep = int(model_fname[-5:])
-            self.epsilon = max(self.epsilon_min, self.epsilon - env.ep * 0.9/1000.)
+            self.epsilon = max(self.epsilon_min, self.epsilon - env.ep * self.epsilon_decay)
+            self.targetmodel.load_weights(name + 'target.hdf5')
             self.memory = pickle.load(open(name + '.p','rb'))
 
 
     def save(self, name):
         self.model.save_weights(name + '.hdf5')
+        self.targetmodel.save_weights(name + 'target.hdf5')
         pickle.dump(self.memory, open(name + '.p', 'wb'))
+
 
 
 class DQNAgent:
