@@ -39,7 +39,7 @@ def init_plugin():
     state_size = 3
     action_size = 3
     train_phase = True
-    model_fname = ''#'output/model00150'
+    model_fname = ''#'output/model00975'
     env = Env()
 
     sess = tf.Session()
@@ -174,6 +174,7 @@ class Env:
         self.acidx = 0
         self.reward = 0
         self.done = False
+        self.done_penalty = False
         self.state = np.ones((1, state_size))
         self.actnum = 0
         self.ep = 0
@@ -207,12 +208,18 @@ class Env:
             if agent.epsilon > agent.epsilon_min:
                 agent.epsilon -= agent.epsilon_decay
             self.done = True
+            if dist >= 1:
+                self.done_penalty = True
+            else:
+                self.done_penalty = False
+
             env.reset()
 
         reward = self.gen_reward()
         # print('State {}'.format(self.state))
         # print('Reward {}, epsilon {}'.format(reward, agent.epsilon))
-        self.log()
+        if train_phase:
+            self.log()
 
         return self.state, reward, self.done, prev_state
 
@@ -222,12 +229,12 @@ class Env:
         t = self.state[1]
         hdg = self.state[2]
         hdg_ref = 60.
+        reward_penalty = 0
 
 
 
 
-
-        a_dist = -0.1
+        a_dist = -0.22
         a_tpos = -0.05
         a_tneg = -0.25
         a_hdg = -0.07
@@ -237,9 +244,10 @@ class Env:
         if t>0:
             t_rew = 5 + a_tpos * t
         else:
-            t_rew = 5 + a_tneg * abs(t)
+            t_rew = a_tneg * abs(t)
 
-        # if self.done:
+        if self.done and self.done_penalty:
+            reward_penalty = -10000.
         #     hdg_rew = a_hdg * abs(degto180(hdg_ref - hdg))
         #
         # else:
@@ -247,7 +255,7 @@ class Env:
 
 
 
-        self.reward = dist_rew + t_rew # + hdg_rew
+        self.reward = dist_rew + t_rew + done_penalty# + hdg_rew
         return self.reward
 
 
@@ -499,9 +507,9 @@ class DuelingDQNAgent:
         self.gamma = 0.98    # discount rate
         self.epsilon = 1.0  # exploration rate
         self.epsilon_min = 0.01
-        self.epsilon_decay = 0.9/900
+        self.epsilon_decay = (1-self.epsilon_min)/250.
         self.learning_rate = 0.001
-        self.clipvalue = 0.5
+        self.clipvalue = 0.1
         self.batch_size = 32
         self.done = False
         self.sta = 0
@@ -637,7 +645,7 @@ class DuelingDQNAgent:
     def act_test(self, state):
         act_values = self.model.predict(env.state.reshape((1,agent.state_size)))
         self.action = np.argmax(act_values[0])
-        print('Qvalues {}'.format(act_values[0]))
+        print('episode {}, state {}, Qvalues {}'.format(env.ep, env.state, act_values[0]))
         self.actions[self.action]()
 
     def update_target_weights(self):
