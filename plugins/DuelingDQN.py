@@ -39,7 +39,7 @@ def init_plugin():
     state_size = 3
     action_size = 3
     train_phase = True
-    model_fname = ''#'output/model00975'
+    model_fname = ''#'output/model00375'
     env = Env()
 
     sess = tf.Session()
@@ -182,7 +182,7 @@ class Env:
 
         if not os.path.isfile(self.fname):
             f = open(self.fname, 'w')
-            f.write("Episode;reward;dist;hdg;t;epsilon;target_t\n")
+            f.write("episode;step;reward;dist;t;hdg;sta;simt;lat;lon;epsilon\n")
             f.close()
 
         self.reset()
@@ -213,13 +213,14 @@ class Env:
             else:
                 self.done_penalty = False
 
-            env.reset()
-
         reward = self.gen_reward()
         # print('State {}'.format(self.state))
         # print('Reward {}, epsilon {}'.format(reward, agent.epsilon))
         if train_phase:
             self.log()
+
+        if self.done:
+            env.reset()
 
         return self.state, reward, self.done, prev_state
 
@@ -236,7 +237,7 @@ class Env:
 
         a_dist = -0.22
         a_tpos = -0.05
-        a_tneg = -0.25
+        a_tneg = -0.1
         a_hdg = -0.07
 
         dist_rew = 3 + a_dist * dist
@@ -255,7 +256,7 @@ class Env:
 
 
 
-        self.reward = dist_rew + t_rew + done_penalty# + hdg_rew
+        self.reward = dist_rew + t_rew + reward_penalty# + hdg_rew
         return self.reward
 
 
@@ -506,7 +507,7 @@ class DuelingDQNAgent:
         self.memory = deque(maxlen=2000)
         self.gamma = 0.98    # discount rate
         self.epsilon = 1.0  # exploration rate
-        self.epsilon_min = 0.01
+        self.epsilon_min = 0.1
         self.epsilon_decay = (1-self.epsilon_min)/250.
         self.learning_rate = 0.001
         self.clipvalue = 0.1
@@ -533,19 +534,21 @@ class DuelingDQNAgent:
     def _build_model(self):
         # Neural Net for Deep-Q learning Model
         state_input = Input(shape=(self.state_size,))
-        A1 = Dense(256, activation='relu')(state_input)
-        A2 = Dense(self.action_size, activation='linear')(A1)
+        A1 = Dense(128, activation='relu')(state_input)
+        A2 = Dense(128, activation='relu')(A1)
+        A3 = Dense(self.action_size, activation='linear')(A2)
         Amean = K.mean(A2, keepdims=True)
         # A_avg = tf.subtract(A2, Amean)
         # Amean = Lambda(lambda a: K.expand_dims(a[:,0], axis=-1) + a[:, 1:] - K.mean(a[:, 1:], keepdims=True),
         #                                      output_shape=(self.action_size,))(A2)
-        A3 = Lambda(lambda a: tf.subtract(a, K.mean(a)), output_shape=(self.action_size,))(A2)
+        A4 = Lambda(lambda a: tf.subtract(a, K.mean(a)), output_shape=(self.action_size,))(A3)
         # Value network
-        V1 = Dense(256, activation='relu')(state_input)
-        V2 = Dense(1, activation='linear')(V1)
-        V2repeat = RepeatVector(3)(V2)
+        V1 = Dense(128, activation='relu')(state_input)
+        V2 = Dense(128, activation='relu')(V1)
+        V3 = Dense(1, activation='linear')(V2)
+        V2repeat = RepeatVector(3)(V3)
 
-        output = Add()([V2, A3])
+        output = Add()([V3, A4])
         model = Model(input=state_input, output=output)
         adam = Adam(lr=self.learning_rate, clipvalue = self.clipvalue)
         model.compile(loss="mse", optimizer=adam)
