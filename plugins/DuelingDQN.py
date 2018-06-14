@@ -38,8 +38,8 @@ def init_plugin():
     global env, agent, eventmanager, state_size, train_phase, model_fname
     state_size = 3
     action_size = 3
-    train_phase = True
-    model_fname = ''#'output/model00375'
+    train_phase = False
+    model_fname = 'output/model00750'
     env = Env()
 
     sess = tf.Session()
@@ -204,7 +204,7 @@ class Env:
         self.state = np.array([dist, t, hdg_rel/180.])
 
         # Check episode termination
-        if dist<1 or agent.sta-sim.simt<-60 or t<-100:
+        if dist<1 or t<-100:
             if agent.epsilon > agent.epsilon_min:
                 agent.epsilon -= agent.epsilon_decay
             self.done = True
@@ -236,19 +236,23 @@ class Env:
 
 
         a_dist = -0.22
-        a_tpos = -0.05
+        a_tpos = -1.
         a_tneg = -0.1
         a_hdg = -0.07
 
         dist_rew = 3 + a_dist * dist
 
-        if t>0:
-            t_rew = 5 + a_tpos * t
-        else:
-            t_rew = a_tneg * abs(t)
+        # if t>0:
+        #     t_rew = 5 + a_tpos * t
+        # else:
+        #     t_rew = a_tneg * abs(t)
+
+        t_rew = 0
 
         if self.done and self.done_penalty:
-            reward_penalty = -10000.
+            t_rew = -10000.
+        elif self.done and not self.done_penalty:
+            t_rew = 100 + a_tpos * abs(t)
         #     hdg_rew = a_hdg * abs(degto180(hdg_ref - hdg))
         #
         # else:
@@ -256,7 +260,7 @@ class Env:
 
 
 
-        self.reward = dist_rew + t_rew + reward_penalty# + hdg_rew
+        self.reward = dist_rew + t_rew# + hdg_rew
         return self.reward
 
 
@@ -266,7 +270,7 @@ class Env:
             print("Saving model after {} episodes".format(self.ep))
 
 
-        stack.stack('open ./scenario/4d.SCN')
+        stack.stack('open ./scenario/bart/APP_SUGOL_RWY06.SCN')
         self.actnum = 0
         self.ep += 1
         self.done=False
