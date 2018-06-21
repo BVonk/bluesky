@@ -38,8 +38,8 @@ def init_plugin():
     global env, agent, eventmanager, state_size, train_phase, model_fname
     state_size = 3
     action_size = 3
-    train_phase = False
-    model_fname = 'output/model00750'
+    train_phase = True
+    model_fname = ''#''output/run_0.16/model00100'
     env = Env()
 
     sess = tf.Session()
@@ -175,7 +175,8 @@ class Env:
         self.reward = 0
         self.done = False
         self.done_penalty = False
-        self.state = np.ones((1, state_size))
+        self.prev_state = np.ones(state_size)
+        self.state = np.ones(state_size)
         self.actnum = 0
         self.ep = 0
         self.fname = './output/log.csv'
@@ -190,7 +191,7 @@ class Env:
 
     def step(self):
         self.actnum += 1
-        prev_state = self.state
+        self.prev_state = self.state
 
         # Update state
         qdr, dist = qdrdist(traf.lat[self.acidx], traf.lon[self.acidx],
@@ -222,12 +223,13 @@ class Env:
         if self.done:
             env.reset()
 
-        return self.state, reward, self.done, prev_state
+        return self.state, reward, self.done, self.prev_state
 
 
     def gen_reward(self):
         dist = self.state[0]
         t = self.state[1]
+        dt = self.state[1]-self.prev_state[1]
         hdg = self.state[2]
         hdg_ref = 60.
         reward_penalty = 0
@@ -236,23 +238,28 @@ class Env:
 
 
         a_dist = -0.22
-        a_tpos = -1.
+        a_tpos = -0.2
         a_tneg = -0.1
         a_hdg = -0.07
 
         dist_rew = 3 + a_dist * dist
 
-        # if t>0:
-        #     t_rew = 5 + a_tpos * t
-        # else:
-        #     t_rew = a_tneg * abs(t)
+
+        if t>0 and dt>0:
+            dt_rew = -1
+        elif t>0 and dt<=0:
+            dt_rew = 1
+        elif t<=0 and dt>0:
+            dt_rew = -1
+        elif t<=0 and dt <=0:
+            dt_rew = 1
 
         t_rew = 0
 
         if self.done and self.done_penalty:
-            t_rew = -10000.
+            t_rew = -100.
         elif self.done and not self.done_penalty:
-            t_rew = 100 + a_tpos * abs(t)
+            t_rew = 10 + a_tpos * abs(t)
         #     hdg_rew = a_hdg * abs(degto180(hdg_ref - hdg))
         #
         # else:
@@ -260,7 +267,7 @@ class Env:
 
 
 
-        self.reward = dist_rew + t_rew# + hdg_rew
+        self.reward = dist_rew + t_rew + dt_rew
         return self.reward
 
 
