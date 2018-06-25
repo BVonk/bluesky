@@ -36,7 +36,7 @@ def init_plugin():
     # Pan to waypoint with fixed zoom level and create a random aircraft.
     # Configuration parameters
     global env, agent, eventmanager, state_size, train_phase, model_fname
-    state_size = 3
+    state_size = 2
     action_size = 3
     train_phase = True
     model_fname = ''#''output/run_0.16/model00100'
@@ -59,7 +59,7 @@ def init_plugin():
         # Update interval in seconds. By default, your plugin's update function(s)
         # are called every timestep of the simulation. If your plugin needs less
         # frequent updates provide an update interval.
-        'update_interval': 1,
+        'update_interval': 5,
 
         # The update function is called after traffic is updated. Use this if you
         # want to do things as a result of what happens in traffic. If you need to
@@ -141,7 +141,8 @@ def test():
     eventmanager.update()
 
 #    print('ETA {} wp {}'.format(ETA(agent.acidx), traf.ap.route[0].wpname[traf.ap.route[0].iactwp]))
-    for i in eventmanager.events:
+#     for i in eventmanager.events:
+    for i in range(traf.ntraf):
         if env.actnum == 0:
             agent.sta = ETA(agent.acidx) + random.random() * 100
 #            print('STA ', agent.sta)
@@ -200,12 +201,14 @@ class Env:
         t = agent.sta - ETA(agent.acidx)
         # print('STA {}, ETA {}, t {}'.format(agent.sta, ETA(agent.acidx), t))
         hdg_rel = degto180(qdr - traf.hdg[agent.acidx])
+        # hdg_rel = degto180(traf.trk[agent.acidx] - traf.hdg[agent.acidx])
 #        self.state = np.array([dist, t, hdg_ref,
 #                               traf.tas[agent.acidx]])
-        self.state = np.array([dist, t, hdg_rel/180.])
+        self.state = np.array([dist, hdg_rel/180.])
 
         # Check episode termination
-        if dist<1 or t<-100:
+        # if dist<1 or t<-100:
+        if dist<1 or sim.simt>800:
             if agent.epsilon > agent.epsilon_min:
                 agent.epsilon -= agent.epsilon_decay
             self.done = True
@@ -230,14 +233,12 @@ class Env:
         dist = self.state[0]
         t = self.state[1]
         dt = self.state[1]-self.prev_state[1]
-        hdg = self.state[2]
+        hdg = self.state[1]
         hdg_ref = 60.
         reward_penalty = 0
 
 
-
-
-        a_dist = -0.22
+        a_dist = -0.1
         a_tpos = -0.2
         a_tneg = -0.1
         a_hdg = -0.07
@@ -267,7 +268,7 @@ class Env:
 
 
 
-        self.reward = dist_rew + t_rew + dt_rew
+        self.reward = dist_rew #+ t_rew + dt_rew
         return self.reward
 
 
@@ -287,7 +288,7 @@ class Env:
     def log(self):
         dist = self.state[0]
         t = self.state[1]
-        hdg = self.state[2]
+        hdg = self.state[1]
         hdg_ref = 60.
         hdg_diff = (degto180(hdg_ref - hdg))
         f = open(self.fname, 'a')
@@ -515,13 +516,13 @@ class DuelingDQNAgent:
         self.acidx = 0
         self.state_size = state_size
         self.action_size = action_size
-        self.memory = deque(maxlen=2000)
-        self.gamma = 0.98    # discount rate
+        self.memory = deque(maxlen=5000)
+        self.gamma = 0.99    # discount rate
         self.epsilon = 1.0  # exploration rate
         self.epsilon_min = 0.1
         self.epsilon_decay = (1-self.epsilon_min)/250.
         self.learning_rate = 0.001
-        self.clipvalue = 0.1
+        self.clipvalue = 0.5
         self.batch_size = 32
         self.done = False
         self.sta = 0
@@ -561,8 +562,8 @@ class DuelingDQNAgent:
 
         output = Add()([V3, A4])
         model = Model(input=state_input, output=output)
-        adam = Adam(lr=self.learning_rate, clipvalue = self.clipvalue)
-        model.compile(loss="mse", optimizer=adam)
+        rmsprop = RMSprop(lr=self.learning_rate, clipvalue = self.clipvalue)
+        model.compile(loss="mse", optimizer=rmsprop)
         print(model.summary())
 
         return model
@@ -601,6 +602,7 @@ class DuelingDQNAgent:
         # Rotate vector
         latB, lonB = qdrpos(latR, lonR, traf.hdg[self.acidx] - 90 + dqdr, turnrad/nm) # [deg, deg]
         cmd = "{} BEFORE {} ADDWPT '{},{}'".format(traf.id[self.acidx], traf.ap.route[0].wpname[-2], latB, lonB)
+        cmd = "{} HDG {}".format(traf.id[self.acidx], (traf.hdg[self.acidx] - 20 )%360)
         stack.stack(cmd)
 
 
@@ -619,8 +621,9 @@ class DuelingDQNAgent:
         latA = traf.lat[self.acidx]
         lonA = traf.lon[self.acidx]
 
-        latB, lonB = qdrpos(latA, lonA, traf.hdg[self.acidx], 0.25)
+        latB, lonB = qdrpos(latA, lonA, traf.hdg[self.acidx], 0.5)
         cmd = "{} BEFORE {} ADDWPT '{},{}'".format(traf.id[self.acidx], traf.ap.route[0].wpname[-2], latB, lonB)
+        cmd = "{} HDG {}".format(traf.id[self.acidx], (traf.hdg[self.acidx]))
         stack.stack(cmd)
 
 
@@ -639,12 +642,13 @@ class DuelingDQNAgent:
         # Rotate vector
         latB, lonB = qdrpos(latR, lonR, traf.hdg[self.acidx] + 90 - dqdr, turnrad/nm) # [deg, deg]
         cmd = "{} BEFORE {} ADDWPT '{},{}'".format(traf.id[self.acidx], traf.ap.route[0].wpname[-2], latB, lonB)
+        cmd = "{} HDG {}".format(traf.id[self.acidx], (traf.hdg[self.acidx] + 20) % 360)
         stack.stack(cmd)
 
 
     def act(self, state):
         act_values = self.model.predict(env.state.reshape((1, agent.state_size)))
-        print('episode {}, state {}, Qvalues {}'.format(env.ep, env.state, act_values[0]))
+        print('episode {}, state {}, Qvalues {}, previous reward {}'.format(env.ep, env.state, act_values[0], env.reward))
         if np.random.rand() <= self.epsilon:
             # The agent acts randomly
             agent.action = random.choice(np.arange(0, self.action_size))
@@ -667,7 +671,7 @@ class DuelingDQNAgent:
         target_model = self.targetmodel.set_weights(weights)
 
     def train(self):
-        c = 1000
+        c = 2000
         batch_size = 32
         minibatch = random.sample(self.memory, batch_size)
         for state, action, reward, next_state, done in minibatch:
