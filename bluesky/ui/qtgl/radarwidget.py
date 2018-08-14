@@ -22,7 +22,7 @@ from bluesky.tools.aero import ft, nm, kts
 from bluesky.tools import geo
 from bluesky.navdatabase import load_aptsurface, load_coastlines
 from .glhelpers import BlueSkyProgram, RenderObject, Font, UniformBuffer, \
-    update_buffer, create_empty_buffer
+    update_buffer, create_empty_buffer, load_texture
 
 
 # Register settings defaults
@@ -75,6 +75,25 @@ if QT_VERSION <= 0x050600:
     CORRECT_PINCH = platform.system() == 'Darwin'
 
 
+def texvbuf(vbuf):
+    vbuf = np.array(vbuf)
+    vbuf = np.reshape(vbuf, (vbuf.size // 2,2))
+    lat = vbuf[:,0]
+    lon = vbuf[:,1]
+    maxlat, minlat = np.min(lat), np.max(lat)
+    minlon, maxlon = np.min(lon), np.max(lon)
+
+    diflat = maxlat - minlat
+    diflon = maxlon - minlon
+
+    newlat = [(i-minlat)/diflat for i in lat]
+    newlon = [(i-minlon)/diflon for i in lon]
+
+
+    result = np.concatenate(list(map(lambda x, y: (x, y), newlat, newlon)))
+    return result
+
+
 class radarUBO(UniformBuffer):
     class Data(Structure):
         _fields_ = [("wrapdir", c_int), ("wraplon", c_float), ("panlat", c_float), ("panlon", c_float),
@@ -125,6 +144,7 @@ class RadarWidget(QGLWidget):
         self.wrapdir = int(0)
 
         self.map_texture    = 0
+        self.osm_texture    = 0
         self.naircraft      = 0
         self.nwaypoints     = 0
         self.ncustwpts      = 0
@@ -181,9 +201,12 @@ class RadarWidget(QGLWidget):
                 buf = np.concatenate(fills)
                 update_buffer(self.allpfillbuf, buf)
                 self.allpfill.set_vertex_count(len(buf) // 2)
+                update_buffer(self.allpfilltexbuf, texvbuf(fills))
+                self.allptex.set_vertex_count(len(buf) // 2)
             else:
                 self.allpolys.set_vertex_count(0)
                 self.allpfill.set_vertex_count(0)
+                self.allptex.set_vertex_count(0)
 
         # Trail data change
         if 'TRAILS' in changed_elems:
@@ -234,6 +257,10 @@ class RadarWidget(QGLWidget):
                 self.map_texture = self.bindTexture(fname)
                 break
 
+        # Load OpenStreetMap texture
+        imfilename = "./bluesky/ui/map.png"
+        self.osm_texture = load_texture(imfilename)
+
         # Create initial empty buffers for aircraft position, orientation, label, and color
         # usage flag indicates drawing priority:
         #
@@ -256,6 +283,7 @@ class RadarWidget(QGLWidget):
         self.polyprevbuf   = create_empty_buffer(MAX_POLYPREV_SEGMENTS * 8, usage=gl.GL_DYNAMIC_DRAW)
         self.allpolysbuf   = create_empty_buffer(MAX_ALLPOLYS_SEGMENTS * 16, usage=gl.GL_DYNAMIC_DRAW)
         self.allpfillbuf   = create_empty_buffer(MAX_ALLPOLYS_SEGMENTS * 24, usage=gl.GL_DYNAMIC_DRAW)
+        self.allpfilltexbuf= create_empty_buffer(MAX_ALLPOLYS_SEGMENTS * 24, usage=gl.GL_DYNAMIC_DRAW)
         self.routebuf      = create_empty_buffer(MAX_ROUTE_LENGTH * 8, usage=gl.GL_DYNAMIC_DRAW)
         self.routewplatbuf = create_empty_buffer(MAX_ROUTE_LENGTH * 4, usage=gl.GL_DYNAMIC_DRAW)
         self.routewplonbuf = create_empty_buffer(MAX_ROUTE_LENGTH * 4, usage=gl.GL_DYNAMIC_DRAW)
@@ -286,7 +314,9 @@ class RadarWidget(QGLWidget):
 
         # Fixed polygons
         self.allpolys = RenderObject(gl.GL_LINES, vertex=self.allpolysbuf, color=palette.polys)
-        self.allpfill = RenderObject(gl.GL_TRIANGLES, vertex=self.allpfillbuf, color=np.append(palette.polys, 50))
+        self.allpfill = RenderObject(gl.GL_TRIANGLES, vertex=self.allpfillbuf, color=np.append(palette.polys, 100))
+
+        self.allptex = RenderObject(gl.GL_TRIANGLES, vertex=self.allpfillbuf, texcoords=self.allpfilltexbuf)
 
         # ------- SSD object -----------------------------
         self.ssd = RenderObject(gl.GL_POINTS)
@@ -479,6 +509,11 @@ class RadarWidget(QGLWidget):
             gl.glBindTexture(gl.GL_TEXTURE_2D, self.map_texture)
             self.map.draw()
 
+        # Draw openstreetmap
+        if actdata.show_poly > 1:
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self.osm_texture)
+            self.allptex.draw()
+
         # Select the non-textured shader
         self.color_shader.use()
 
@@ -509,6 +544,8 @@ class RadarWidget(QGLWidget):
             self.allpolys.draw()
             if actdata.show_poly > 1:
                 self.allpfill.draw()
+                self.texture_shader.use()
+                gl.glBindTexture(gl.GL_TEXTURE_2D, self.osm_texture)
 
         # --- DRAW THE SELECTED AIRCRAFT ROUTE (WHEN AVAILABLE) ---------------
         if actdata.show_traf:
