@@ -107,7 +107,11 @@ cluster_labels = clusterer.fit_predict(db_arr)
 nclusters = max(cluster_labels)
 x = np.where(cluster_labels==-1)[0]
 for X in x:
+<<<<<<< HEAD
     plt.plot(df.loc[df['flightid'] == flightids[X]].lon1, df.loc[df['flightid'] == flightids[X]].lat1, color='y')
+=======
+    plt.plot(df.loc[df['flightid'] == flightids[X]].lat1, df.loc[df['flightid'] == flightids[X]].lon1, color='y')
+>>>>>>> master
 
 x = np.where(cluster_labels==-1)[0]
 for i in np.arange(nclusters+1):
@@ -121,7 +125,11 @@ for i in np.arange(nclusters+1):
         if i==2:
             color='g'
 
+<<<<<<< HEAD
         plt.plot(df.loc[df['flightid'] == flightids[X]].lon1, df.loc[df['flightid'] == flightids[X]].lat1, color=color)
+=======
+        plt.plot(df.loc[df['flightid'] == flightids[X]].lat1, df.loc[df['flightid'] == flightids[X]].lon1, color=color)
+>>>>>>> master
 # build trajectory matrix
 
 #d = np.arange(0, int(cumdist[-1])+1, 0.1)

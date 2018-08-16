@@ -7,18 +7,32 @@ Created on Mon Jul 23 14:20:56 2018
 
 import sys
 sys.path.append('../../bluesky/tools/')
+<<<<<<< HEAD
 #from geo import qdrdist
 #from aero import vtas2cas
 
 #import datetime
+=======
+from geo import qdrdist
+from aero import vtas2cas
+
+import datetime
+>>>>>>> master
 import pandas as pd
 import numpy as np
 
 import matplotlib.pyplot as plt
+<<<<<<< HEAD
 #import sklearn
 #from scipy.interpolate import PchipInterpolator
 #import rdp
 #import hdbscan
+=======
+import sklearn
+from scipy.interpolate import PchipInterpolator
+import rdp
+import hdbscan
+>>>>>>> master
 #import seaborn as sns
 #import traj_dist.distance as tdist
 #import pyproj
@@ -83,11 +97,18 @@ yf=[52.257, 52.2226]
 wpf = genwp(xf[0], xf[1], yf[0], yf[1], 4)
 wp1 = genwp(4.4145, 4.43909, 52.198, 52.2514, 4)
 wp2 = genwp(4.35582, 4.39785, 52.2031, 52.2565, 4)
+<<<<<<< HEAD
 #plt.scatter(*zip(*wpf), color='r')
 #plt.scatter(*zip(*wp1), color='r')
 #plt.scatter(*zip(*wp2), color='r')
 plt.xlabel('Latitude [deg]')
 plt.ylabel('Longitude [deg]')
+=======
+plt.scatter(*zip(*wpf), color='r')
+plt.scatter(*zip(*wp1), color='r')
+plt.scatter(*zip(*wp2), color='r')
+
+>>>>>>> master
 
 #plt.plot()
 ##plt.plot([5.453, 5.46], [52.482, 52.456], color='r')
