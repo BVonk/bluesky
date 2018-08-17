@@ -46,8 +46,7 @@ class ActiveWaypoint(TrafficArrays):
         proxfact = 1.01 # Turnradius scales this contant , factor => [turnrad]
         incircle = dist<turnrad*proxfact
         circling = away*incircle # [True/False] passed wp,used for flyover as well
-
-        nonflyby = (not flyby) * away * (dist<1000)
+        nonflyby = (flyby==1) * away * (np.array(dist)<1000)
 #        print("NONFLYBY ", nonflyby)
         # Check whether shift based dist is required, set closer than WP turn distance
         swreached = np.where(bs.traf.swlnav * ((dist < self.turndist)+circling+nonflyby))[0]
