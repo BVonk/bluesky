@@ -191,7 +191,9 @@ class Agent():
 
             actwp = traf.ap.route[i].iactwp
             if traf.ap.route[i].wptype[actwp] == 3:
-                a=1
+                ac_values = self.ac_dict.get(traf.id[i])
+                ac_values[0] = 1
+                self.ac_dict[traf.id[i]] = s[traf.id[i]]
 
         # return list of waypoints
 
@@ -253,7 +255,8 @@ class Agent():
         # Select action
         wp_action_masked = wp_action * mask
         print(wp_action_masked)
-        wp_ind = np.argmax(wp_action_masked, axis=0)
+
+        wp_ind = np.argmax(wp_action, axis=0) # wp_action_masked
         spd_ind = np.argmax(spd_action, axis=0)
         speed_actions = [self.speedvalues[i] for i in spd_ind]
 
@@ -268,11 +271,13 @@ class Agent():
             ac_name = traf.id[i]
             wp_values = self.ac_dict.get(ac_name)
             # Only add wpts to route if required
-            if wp_values[0]==1:
+            actwp = traf.ap.route[i].iactwp
+            if traf.ap.route[i].wptype[actwp] == 3: # actwp == 3 corresponds to destination
                 wp_name = wp_values[1]
                 wp_name[2] = wp_ind[i]
                 self.ac_dict[traf.id[i]] = [0, wp_name]
                 stack.stack("{} ADDWPT RL{}".format(ac_name,  ''.join(map(str, wp_name))))
+                wp_name[1] = wp_name[1] + 1
 
             # Create speed command
             stack.stack("{} SPD {}".format(ac_name, speed_actions[i]))
