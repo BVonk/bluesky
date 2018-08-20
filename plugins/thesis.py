@@ -91,10 +91,13 @@ def init_plugin():
 
     stack.stack("CRE BART001, B737, 51.862982, 2.830079, 90, fl200, 150")
     stack.stack("BART001 DEST EHAM RWY06")
+    stack.stack("BART001 VNAV ON")
     stack.stack("CRE BART002, B737, 51.2, 2.83, 90, FL200, 150")
     stack.stack("BART002 DEST EHAM RWY06")
+    stack.stack("BART002 VNAV ON")
     stack.stack("CRE BART003, B737, 50.9, 2.83, 90, FL200, 150")
     stack.stack("BART003 DEST EHAM RWY06")
+    stack.stack("BART003 VNAV ON")
 
     # init_plugin() should always return these two dicts.
     return config, stackfunctions
@@ -112,6 +115,7 @@ def init():
     load_routes()
     stack.stack("BART001 DEST EHAM RWY06")
 
+
 def preupdate():
     # Initialize routes
     if sim.simt < 1.5:
@@ -121,7 +125,6 @@ def preupdate():
 
 def reset():
     pass
-
 
 
 # wptype 3 == Destination --> So check for that:
@@ -173,8 +176,10 @@ class Environment:
 class Agent():
     def __init__(self):
         self.ac_dict = {}
+        self.speedvalues = [175, 200, 225, 250]
         self.wpactionsize=3
-        self.spdactionsize=4
+        self.spdactionsize=len(self.speedvalues)
+
 
     def __update_aircraft_waypoints(self):
         """
@@ -192,11 +197,15 @@ class Agent():
 
 
     def __update_acdict_entries(self):
-        # Check which aircraft have to be added to dictionary:
+        """
+        Check which aircraft have to be added to dictionary or deleted when aircraft have landed.
+        Sets the aircraft status to [x, [wpindex]. New aircraft are initialized without wpname
+        x = 1 when aircraft must select new waypoint, otherwise 0
+        """
         for id in traf.id:
             # print(traf.id)
             if id not in self.ac_dict:
-                self.ac_dict[id]=[1,'RL000']
+                self.ac_dict[id]=[1,[0,0,0]]
         # If aircraft sizes are not equal then aircraft also have to be deleted
         if len(self.ac_dict) < traf.ntraf:
             for key in self.ac_dict.keys():
@@ -213,16 +222,18 @@ class Agent():
 
 
     def get_mask(self):
-        # The mask is related to the final
-        mask = np.zeros((self.wpactionsize, traf.ntraf))
+        """
+        Creates a mask for valid actions an aircraft can select. Masks the aircraft in the dictionary set that require a new waypoint to be selected with 1.
+        :return:
+        """
+        actionmask = np.zeros((self.wpactionsize, traf.ntraf))
         for i in np.arange(traf.ntraf):
             value = self.ac_dict.get(traf.id[i])
             if value[0]==0:
-                mask[value[1][3], i]=1
+                actionmask[value[1][2], i]=1
             else:
-                mask[:,i]=1
-
-        return mask
+                actionmask[:,i]=1
+        return actionmask
 
 
     def act(self):
@@ -231,11 +242,45 @@ class Agent():
         print(self.ac_dict)
         # __update_aircraft_waypoints()
 
+        # Infer action selection
         wp_action = np.random.random((self.wpactionsize,traf.ntraf))
         spd_action = np.random.random((self.spdactionsize,traf.ntraf))
 
+        # Retrieve mask for action selection
         mask = self.get_mask()
         print(mask)
+
+        # Select action
+        wp_action_masked = wp_action * mask
+        print(wp_action_masked)
+        wp_ind = np.argmax(wp_action_masked, axis=0)
+        spd_ind = np.argmax(spd_action, axis=0)
+        speed_actions = [self.speedvalues[i] for i in spd_ind]
+
+        # Produce action command
+        # Get the number of segments in main route index and construct
+        maxsegments = 4 # Dummy to replace
+
+        # Action is already selected. Just generate the commands ;)
+
+        for i in np.arange(traf.ntraf):
+            # Set wpindex
+            ac_name = traf.id[i]
+            wp_values = self.ac_dict.get(ac_name)
+            # Only add wpts to route if required
+            if wp_values[0]==1:
+                wp_name = wp_values[1]
+                wp_name[2] = wp_ind[i]
+                self.ac_dict[traf.id[i]] = [0, wp_name]
+                stack.stack("{} ADDWPT RL{}".format(ac_name,  ''.join(map(str, wp_name))))
+
+            # Create speed command
+            stack.stack("{} SPD {}".format(ac_name, speed_actions[i]))
+
+        # Wp command stack.stack(callsign ADDWPT wpname)
+        # Spd command
+
+
 
 
 
