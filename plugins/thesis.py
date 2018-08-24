@@ -13,6 +13,10 @@ from bluesky.tools.misc import degto180
 from bluesky import traf
 from bluesky import navdb
 from bluesky.tools.aero import nm, g0
+from plugins.ml.actor import ActorNetwork
+from plugins.ml.critic import CriticNetwork
+from plugins.ml.ReplayMemory import ReplayMemory
+
 
 from vierd import ETA
 
@@ -105,10 +109,9 @@ def init_plugin():
 
 
 def update():
-    # get_routes()
-    # print(traf.ap.route[0].wpname, traf.ap.route[0].iactwp, traf.ap.route[0].wptype)
-    agent.act()
-    pass
+    # Train in the update function
+    agent.train()
+
 
 
 def init():
@@ -120,10 +123,22 @@ def preupdate():
     # Initialize routes
     if sim.simt < 1.5:
         init()
+        new_state = env.init()
+
+    else:
+        # Construct new state
+        state, reward, new_state, done = env.step()
+        agent.update_replay(state, reward, done, new_state)
+        agent.train()
+
+    agent.act(new_state)
+
+
     pass
 
 
 def reset():
+
     pass
 
 
@@ -156,8 +171,14 @@ class Environment:
         for id in traf.id:
             ac_dict[id]= [0,0,0]
 
+    def init(self):
+        return self.generate_observation()
+
     def step(self):
-        pass
+        prev_observation = self.observation
+        observation = self.generate_observation()
+        reward = self.generate_reward()
+        return prev_observation, reward, observation, self.done
 
     def generate_reward(self):
         pass
@@ -172,14 +193,32 @@ class Environment:
 
 
 
-
-class Agent():
+class Agent:
     def __init__(self):
         self.ac_dict = {}
-        self.speedvalues = [175, 200, 225, 250]
-        self.wpactionsize=3
-        self.spdactionsize=len(self.speedvalues)
+        self.speed_values = [175, 200, 225, 250]
+        self.wp_action_size=3
+        self.spd_action_size=len(self.speed_values)
+        self.state_size=5
+        self.action_size=self.wp_action_size + self.spd_action_size
+        self.max_agents = 80
+        self.memory_size = 10000
 
+
+        self.batch_size = 32
+        self.tau = 0.9
+        self.critic_learning_rate = 0.001
+        self.actor_learning_rate = 0.0001
+
+
+        self.sess = tf.Session()
+        self.actor = ActorNetwork(sess, self.state_size, self.action_size, self.max_agents, self.batch_size, self.tau, self.actor_learning_rate)
+        self.critic = CriticNetwork(sess, self.state_size, self.action_size, self.max_agents, self.batch_size, self.tau, self.critic_learning_rate)
+        self.replay_memory = ReplayMemory(self.memory_size)
+
+
+    def train(self):
+        pass
 
     def __update_aircraft_waypoints(self):
         """
@@ -228,7 +267,7 @@ class Agent():
         Creates a mask for valid actions an aircraft can select. Masks the aircraft in the dictionary set that require a new waypoint to be selected with 1.
         :return:
         """
-        actionmask = np.zeros((self.wpactionsize, traf.ntraf))
+        actionmask = np.zeros((self.wp_action_size, traf.ntraf))
         for i in np.arange(traf.ntraf):
             value = self.ac_dict.get(traf.id[i])
             if value[0]==0:
@@ -238,15 +277,15 @@ class Agent():
         return actionmask
 
 
-    def act(self):
+    def act(self, state):
         # Select actions for each aircraft
         self.__update_acdict_entries()
         print(self.ac_dict)
         # __update_aircraft_waypoints()
 
         # Infer action selection
-        wp_action = np.random.random((self.wpactionsize,traf.ntraf))
-        spd_action = np.random.random((self.spdactionsize,traf.ntraf))
+        wp_action = np.random.random((self.wp_action_size,traf.ntraf))
+        spd_action = np.random.random((self.spd_action_size,traf.ntraf))
 
         # Retrieve mask for action selection
         mask = self.get_mask()
@@ -258,7 +297,7 @@ class Agent():
 
         wp_ind = np.argmax(wp_action, axis=0) # wp_action_masked
         spd_ind = np.argmax(spd_action, axis=0)
-        speed_actions = [self.speedvalues[i] for i in spd_ind]
+        speed_actions = [self.speed_values[i] for i in spd_ind]
 
         # Produce action command
         # Get the number of segments in main route index and construct
@@ -284,13 +323,6 @@ class Agent():
 
         # Wp command stack.stack(callsign ADDWPT wpname)
         # Spd command
-
-
-
-
-
-
-
 
 
 
