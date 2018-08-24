@@ -1,5 +1,5 @@
 import numpy as np
-from bicnet import BiCNet
+from plugins.ml.bicnet import BiCNet
 import tensorflow as tf
 import keras.backend as K
 
@@ -19,7 +19,7 @@ class ActorNetwork(object):
         self.params_grad = tf.gradients(self.model.output, self.weights, -self.action_gradient)
         grads = zip(self.params_grad, self.weights)
         self.optimize = tf.train.AdamOptimizer(LEARNING_RATE).apply_gradients(grads)
-        self.sess.run(tf.initialize_all_variables())
+        self.sess.run(tf.global_variables_initializer())
 
     def train(self, states, action_grads):
         self.sess.run(self.optimize, feed_dict={

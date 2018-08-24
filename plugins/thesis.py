@@ -18,7 +18,7 @@ from plugins.ml.critic import CriticNetwork
 from plugins.ml.ReplayMemory import ReplayMemory
 
 
-from vierd import ETA
+from plugins.vierd import ETA
 
 import pickle
 import random
@@ -128,7 +128,7 @@ def preupdate():
     else:
         # Construct new state
         state, reward, new_state, done = env.step()
-        agent.update_replay(state, reward, done, new_state)
+        agent.update_replay_memory(state, reward, done, new_state)
         agent.train()
 
     agent.act(new_state)
@@ -168,8 +168,10 @@ class Environment:
         self.global_obs = np.zeros(10)
         self.ac_dict = {}
         self.prev_traf = 0
+        self.observation = []
+        self.done = False
         for id in traf.id:
-            ac_dict[id]= [0,0,0]
+            self.ac_dict[id]= [0,0,0]
 
     def init(self):
         return self.generate_observation()
@@ -202,23 +204,70 @@ class Agent:
         self.state_size=5
         self.action_size=self.wp_action_size + self.spd_action_size
         self.max_agents = 80
+        self.action = []
         self.memory_size = 10000
 
 
         self.batch_size = 32
         self.tau = 0.9
+        self.gamma = 0.99
         self.critic_learning_rate = 0.001
         self.actor_learning_rate = 0.0001
+        self.loss = 0
+        self.train_indicator = True
 
 
-        self.sess = tf.Session()
-        self.actor = ActorNetwork(sess, self.state_size, self.action_size, self.max_agents, self.batch_size, self.tau, self.actor_learning_rate)
-        self.critic = CriticNetwork(sess, self.state_size, self.action_size, self.max_agents, self.batch_size, self.tau, self.critic_learning_rate)
+
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        self.sess = tf.Session(config=config)
+
+        K.set_session(self.sess)
+
+        self.actor = ActorNetwork(self.sess, self.state_size, self.action_size, self.max_agents, self.batch_size, self.tau, self.actor_learning_rate)
+        self.critic = CriticNetwork(self.sess, self.state_size, self.action_size, self.max_agents, self.batch_size, self.tau, self.critic_learning_rate)
         self.replay_memory = ReplayMemory(self.memory_size)
 
+        #Now load the weight
+        print("Now we load the weight")
+        try:
+            self.actor.model.load_weights("actormodel.h5")
+            self.critic.model.load_weights("criticmodel.h5")
+            self.actor.target_model.load_weights("actormodel.h5")
+            self.critic.target_model.load_weights("criticmodel.h5")
+            print("Weight load successfully")
+        except:
+            print("Cannot find the weight")
 
     def train(self):
-        pass
+        # Do the batch update
+        batch = self.replay_memory.getBatch(self.batch_size)
+        states = np.asarray([e[0] for e in batch])
+        actions = np.asarray([e[1] for e in batch])
+        rewards = np.asarray([e[2] for e in batch])
+        new_states = np.asarray([e[3] for e in batch])
+        dones = np.asarray([e[4] for e in batch])
+        y_t = np.asarray([e[1] for e in batch])
+
+        target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict(new_states)])
+
+        for k in range(len(batch)):
+            if dones[k]:
+                y_t[k] = rewards[k]
+            else:
+                y_t[k] = rewards[k] + self.gamma * target_q_values[k]
+
+        if self.train_indicator:
+            self.loss += self.critic.model.train_on_batch([states, actions], y_t)
+            a_for_grad = self.actor.model.predict(states)
+            grads = self.critic.gradients(states, a_for_grad)
+            self.actor.train(states, grads)
+            self.actor.target_train()
+            self.critic.target_train()
+
+
+    def update_replay_memory(self, state, reward, done, new_state):
+        self.replay_memory.add(state, self.action, reward, new_state, done)
 
     def __update_aircraft_waypoints(self):
         """
@@ -232,7 +281,7 @@ class Agent:
             if traf.ap.route[i].wptype[actwp] == 3:
                 ac_values = self.ac_dict.get(traf.id[i])
                 ac_values[0] = 1
-                self.ac_dict[traf.id[i]] = s[traf.id[i]]
+                self.ac_dict[traf.id[i]] = [traf.id[i]]
 
         # return list of waypoints
 

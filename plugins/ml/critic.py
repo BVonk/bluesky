@@ -1,5 +1,5 @@
 import numpy as np
-from bicnet import BiCNet
+from plugins.ml.bicnet import BiCNet
 
 import keras.backend as K
 import tensorflow as tf
