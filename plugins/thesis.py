@@ -110,7 +110,10 @@ def init_plugin():
 
 def update():
     # Train in the update function
-    agent.train()
+    # if agent.replay_memory.num_experiences > agent.batch_size:
+    #     print('replay {}'.format(agent.replay_memory.num_experiences))
+    #     agent.train()
+    pass
 
 
 
@@ -124,12 +127,16 @@ def preupdate():
     if sim.simt < 1.5:
         init()
         new_state = env.init()
+        stack.stack("CRE BART004, B737, 51.862982, 2.830079, 90, fl200, 150")
+        stack.stack("BART004 DEST EHAM RWY06")
+        stack.stack("BART004 VNAV ON")
 
     else:
         # Construct new state
         state, reward, new_state, done = env.step()
         agent.update_replay_memory(state, reward, done, new_state)
-        agent.train()
+        if agent.replay_memory.num_experiences > agent.batch_size:
+            agent.train()
 
     agent.act(new_state)
 
@@ -165,7 +172,6 @@ def get_routes():
 class Environment:
     def __init__(self):
         self.n_aircraft = traf.ntraf
-        self.global_obs = np.zeros(10)
         self.ac_dict = {}
         self.prev_traf = 0
         self.observation = []
@@ -174,19 +180,28 @@ class Environment:
             self.ac_dict[id]= [0,0,0]
 
     def init(self):
-        return self.generate_observation()
+        self.generate_observation()
+        return self.observation
 
     def step(self):
         prev_observation = self.observation
-        observation = self.generate_observation()
-        reward = self.generate_reward()
-        return prev_observation, reward, observation, self.done
+        self.generate_observation()
+        # Check termination conditions
+        self.check_termination()
+        self.generate_reward()
+        return prev_observation, self.reward, self.observation, self.done
 
     def generate_reward(self):
-        pass
+        global_reward = 1
+        local_reward = np.ones((traf.ntraf,1))
+        self.reward = local_reward + global_reward
 
     def generate_observation(self):
-        pass
+        # Produce a running average off all variables in the field with regard to the initial state convergence that is being tackled in the problem.
+        self.observation = np.array([traf.lat, traf.lon, traf.tas, traf.cas, traf.alt]).transpose()
+
+    def check_termination(self):
+        self.done = False
 
     def generate_commands(self):
         pass
@@ -202,13 +217,14 @@ class Agent:
         self.wp_action_size=3
         self.spd_action_size=len(self.speed_values)
         self.state_size=5
-        self.action_size=self.wp_action_size + self.spd_action_size
+        #TODO: Set the correct action size to correspond with the desired action output and neural network architecture
+        self.action_size=1 #self.wp_action_size + self.spd_action_size
         self.max_agents = 80
         self.action = []
         self.memory_size = 10000
 
 
-        self.batch_size = 32
+        self.batch_size = 4
         self.tau = 0.9
         self.gamma = 0.99
         self.critic_learning_rate = 0.001
@@ -218,53 +234,75 @@ class Agent:
 
 
 
-        config = tf.ConfigProto()
-        config.gpu_options.allow_growth = True
-        self.sess = tf.Session(config=config)
-
+        # config = tf.ConfigProto()
+        # config.gpu_options.allow_growth = True
+        # self.sess = tf.Session(config=config)
+        self.sess = tf.Session()
         K.set_session(self.sess)
 
-        self.actor = ActorNetwork(self.sess, self.state_size, self.action_size, self.max_agents, self.batch_size, self.tau, self.actor_learning_rate)
-        self.critic = CriticNetwork(self.sess, self.state_size, self.action_size, self.max_agents, self.batch_size, self.tau, self.critic_learning_rate)
+        self.actor = ActorNetwork(self.sess, self.state_size, self.action_size, self.batch_size, self.tau, self.actor_learning_rate)
+        self.critic = CriticNetwork(self.sess, self.state_size, self.action_size, self.batch_size, self.tau, self.critic_learning_rate)
         self.replay_memory = ReplayMemory(self.memory_size)
 
         #Now load the weight
-        print("Now we load the weight")
         try:
             self.actor.model.load_weights("actormodel.h5")
             self.critic.model.load_weights("criticmodel.h5")
             self.actor.target_model.load_weights("actormodel.h5")
             self.critic.target_model.load_weights("criticmodel.h5")
-            print("Weight load successfully")
+            print("Weights load successfully")
         except:
-            print("Cannot find the weight")
+            print("Cannot find the weights")
+
+
+    def pad_zeros(self, array, max_timesteps):
+        if array.shape[0] == max_timesteps:
+            return array
+        else:
+            result = np.zeros((max_timesteps, array.shape[1]))
+            result[:array.shape[0], :] = array
+            return result
 
     def train(self):
         # Do the batch update
         batch = self.replay_memory.getBatch(self.batch_size)
-        states = np.asarray([e[0] for e in batch])
-        actions = np.asarray([e[1] for e in batch])
-        rewards = np.asarray([e[2] for e in batch])
-        new_states = np.asarray([e[3] for e in batch])
+        for e in batch:
+            print(e[0].shape)
+
+        # Find maximum sequence length and pad with zeros.
+        sequence_length = [e[0].shape[0] for e in batch]
+        max_t = max(sequence_length)
+
+
+        states = np.asarray([self.pad_zeros(e[0], max_t) for e in batch])
+        actions = np.asarray([self.pad_zeros(e[1], max_t) for e in batch])
+        rewards = np.asarray([self.pad_zeros(e[2], max_t) for e in batch])
+        new_states = np.asarray([self.pad_zeros(e[3], max_t) for e in batch])
         dones = np.asarray([e[4] for e in batch])
-        y_t = np.asarray([e[1] for e in batch])
+        y_t = actions.copy()
 
+        # print(states.shape, states)
+        # print('batch', batch)
+        # print('new_states - ', new_states.shape)
+        # print('predicted', self.actor.target_model.predict(new_states))
         target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict(new_states)])
-
+        # print(target_q_values.shape)
         for k in range(len(batch)):
             if dones[k]:
                 y_t[k] = rewards[k]
             else:
+                # print(rewards[k].shape, target_q_values[k].shape, y_t[k].shape)
                 y_t[k] = rewards[k] + self.gamma * target_q_values[k]
 
         if self.train_indicator:
+            print(states.shape, actions.shape, y_t.shape)
             self.loss += self.critic.model.train_on_batch([states, actions], y_t)
             a_for_grad = self.actor.model.predict(states)
             grads = self.critic.gradients(states, a_for_grad)
             self.actor.train(states, grads)
             self.actor.target_train()
             self.critic.target_train()
-
+            print("training epoch succesful")
 
     def update_replay_memory(self, state, reward, done, new_state):
         self.replay_memory.add(state, self.action, reward, new_state, done)
@@ -329,20 +367,21 @@ class Agent:
     def act(self, state):
         # Select actions for each aircraft
         self.__update_acdict_entries()
-        print(self.ac_dict)
+        # print(self.ac_dict)
         # __update_aircraft_waypoints()
 
         # Infer action selection
+        self.action = np.random.random((traf.ntraf, 1))
         wp_action = np.random.random((self.wp_action_size,traf.ntraf))
         spd_action = np.random.random((self.spd_action_size,traf.ntraf))
 
         # Retrieve mask for action selection
         mask = self.get_mask()
-        print(mask)
+        # print(mask)
 
         # Select action
         wp_action_masked = wp_action * mask
-        print(wp_action_masked)
+        # print(wp_action_masked)
 
         wp_ind = np.argmax(wp_action, axis=0) # wp_action_masked
         spd_ind = np.argmax(spd_action, axis=0)
