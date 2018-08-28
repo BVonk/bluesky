@@ -349,7 +349,7 @@ class ActorCritic:
                     self.critic_action_input: predicted_action
                     })[0]
 
-            self.sess.run(self.optimize, feed_dicht={
+            self.sess.run(self.optimize, feed_dict={
                     self.actor_state_input: state,
                     self.actor_critic_grad: grads})
 

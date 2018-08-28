@@ -16,7 +16,7 @@ class ReplayMemory():
             return random.sample(self.memory, batch_size)
 
     def size(self):
-        return self.memroy_size
+        return self.memory_size
 
     def add(self, state, action, reward, new_state, done):
         experience = (state, action, reward, new_state, done)
@@ -25,7 +25,7 @@ class ReplayMemory():
             self.num_experiences += 1
         else:
             self.memory.popleft()
-            self.memroy.append(experience)
+            self.memory.append(experience)
 
     def count(self):
         # if buffer is full, return buffer size

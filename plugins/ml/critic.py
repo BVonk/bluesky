@@ -15,8 +15,8 @@ class CriticNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model, self.action, self.state = BiCNet.build_critic(max_agents, state_size, action_size, 64, 64, LEARNING_RATE)
-        self.target_model, self.target_action, self.target_state = BiCNet.build_critic(max_agents, state_size, action_size, 64, 64, LEARNING_RATE)
+        self.model, self.action, self.state = BiCNet.build_critic(None, state_size, action_size, 64, 64, LEARNING_RATE)
+        self.target_model, self.target_action, self.target_state = BiCNet.build_critic(None, state_size, action_size, 64, 64, LEARNING_RATE)
         self.action_grads = tf.gradients(self.model.output, self.action)  #GRADIENTS for policy update
         self.sess.run(tf.global_variables_initializer())
 
