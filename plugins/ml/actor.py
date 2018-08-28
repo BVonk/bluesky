@@ -4,7 +4,7 @@ import tensorflow as tf
 import keras.backend as K
 
 class ActorNetwork(object):
-    def __init__(self, sess, state_size, action_size, max_agents, BATCH_SIZE, TAU, LEARNING_RATE):
+    def __init__(self, sess, state_size, action_size, BATCH_SIZE, TAU, LEARNING_RATE):
         self.sess = sess
         self.BATCH_SIZE = BATCH_SIZE
         self.TAU = TAU
@@ -13,8 +13,8 @@ class ActorNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model , self.weights, self.state = BiCNet.build_actor(None, state_size, action_size, 64, 64)
-        self.target_model, self.target_weights, self.target_state = BiCNet.build_actor(None, state_size, action_size, 64, 64)
+        self.model , self.weights, self.state = BiCNet.build_actor(None, state_size, action_size, 64, 64, 'actor')
+        self.target_model, self.target_weights, self.target_state = BiCNet.build_actor(None, state_size, action_size, 64, 64, 'actor_target')
         self.action_gradient = tf.placeholder(tf.float32,[None, None, action_size])
         self.params_grad = tf.gradients(self.model.output, self.weights, -self.action_gradient)
         grads = zip(self.params_grad, self.weights)

@@ -5,7 +5,7 @@ import keras.backend as K
 import tensorflow as tf
 
 class CriticNetwork(object):
-    def __init__(self, sess, state_size, action_size, max_agents, BATCH_SIZE, TAU, LEARNING_RATE):
+    def __init__(self, sess, state_size, action_size, BATCH_SIZE, TAU, LEARNING_RATE):
         self.sess = sess
         self.BATCH_SIZE = BATCH_SIZE
         self.TAU = TAU
@@ -15,8 +15,8 @@ class CriticNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model, self.action, self.state = BiCNet.build_critic(None, state_size, action_size, 64, 64, LEARNING_RATE)
-        self.target_model, self.target_action, self.target_state = BiCNet.build_critic(None, state_size, action_size, 64, 64, LEARNING_RATE)
+        self.model, self.action, self.state = BiCNet.build_critic(None, state_size, action_size, 64, 64, LEARNING_RATE, 'critic')
+        self.target_model, self.target_action, self.target_state = BiCNet.build_critic(None, state_size, action_size, 64, 64, LEARNING_RATE, 'critic_target')
         self.action_grads = tf.gradients(self.model.output, self.action)  #GRADIENTS for policy update
         self.sess.run(tf.global_variables_initializer())
 
