@@ -269,10 +269,11 @@ class Agent:
         for e in batch:
             print(e[0].shape)
 
-        # Find maximum sequence length and pad with zeros.
+        # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
+        # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
+        # calculations
         sequence_length = [e[0].shape[0] for e in batch]
         max_t = max(sequence_length)
-
 
         states = np.asarray([self.pad_zeros(e[0], max_t) for e in batch])
         actions = np.asarray([self.pad_zeros(e[1], max_t) for e in batch])
@@ -287,6 +288,8 @@ class Agent:
         # print('predicted', self.actor.target_model.predict(new_states))
         target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict(new_states)])
         # print(target_q_values.shape)
+
+        #Compute the target values
         for k in range(len(batch)):
             if dones[k]:
                 y_t[k] = rewards[k]

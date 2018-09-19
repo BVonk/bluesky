@@ -1,12 +1,14 @@
 from keras.models import Model
-from keras.layers import Dense, Input, TimeDistributed, Bidirectional, LSTM, Concatenate
+from keras.layers import Dense, Input, TimeDistributed, Bidirectional, LSTM, Concatenate, Masking
 from keras.optimizers import Adam
 
 class BiCNet:
     @staticmethod
     def build_actor(max_agents, obs_dim, act_dim, H1, H2, name):
         S = Input(shape=(max_agents, obs_dim), name=name+'_input_states')
-        h0 = TimeDistributed(Dense(H1, activation='relu'))(S)
+        # Set the masking value to ignore 0 padded sequence inputs.
+        mask = Masking(mask_value=0.)(S)
+        h0 = TimeDistributed(Dense(H1, activation='relu'))(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True))(h0)
         h2 = TimeDistributed(Dense(act_dim, activation='relu', name=name+'_output'))(h1)
         model = Model(inputs=S, outputs=h2)
@@ -17,7 +19,9 @@ class BiCNet:
         S = Input(shape=(max_agents, obs_dim), name=name+'_input_states')
         A = Input(shape=(max_agents, act_dim), name=name+'_input_actions')
         M = Concatenate()([S,A])
-        h0 = TimeDistributed(Dense(H1, activation='relu'))(M)
+        # Set the masking value to ignore 0 padded sequence inputs.
+        mask = Masking(mask_value=0.)(M)
+        h0 = TimeDistributed(Dense(H1, activation='relu'))(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True))(h0)
         h2 = TimeDistributed(Dense(1, activation='relu'), name=name+'_output')(h1)
         model = Model(inputs=[S,A], outputs=h2)
