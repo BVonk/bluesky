@@ -1,6 +1,6 @@
 import numpy as np
-from plugins.ml.bicnet import BiCNet
-
+#from plugins.ml.bicnet import BiCNet
+from bicnet import BiCNet
 import keras.backend as K
 import tensorflow as tf
 
@@ -15,10 +15,10 @@ class CriticNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model, self.Q_values, self.actions, self.states = BiCNet.build_critic(None, state_size, action_size, 64, 64, LEARNING_RATE,
+        self.model, self.Q_values, self.actions, self.states = BiCNet.build_critic(None, state_size, action_size, 8, 8, LEARNING_RATE,
                                                                   'critic')
         self.target_model, self.target_out, self.target_actions, self.target_states = BiCNet.build_critic(None, state_size, action_size,
-                                                                                       64, 64, LEARNING_RATE,
+                                                                                       8, 8, LEARNING_RATE,
                                                                                        'critic_target')
         # Gradient of the critic output w.r.t. the actions.
 

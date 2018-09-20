@@ -10,7 +10,7 @@ class BiCNet:
         mask = Masking(mask_value=0.)(S)
         h0 = TimeDistributed(Dense(H1, activation='relu'))(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True))(h0)
-        h2 = TimeDistributed(Dense(act_dim, activation='relu', name=name+'_output'))(h1)
+        h2 = TimeDistributed(Dense(act_dim, activation='linear', name=name+'_output'))(h1)
         out = h2
         model = Model(inputs=S, outputs=out)
         return model, model.trainable_weights, out, S
@@ -24,7 +24,7 @@ class BiCNet:
         mask = Masking(mask_value=0.)(M)
         h0 = TimeDistributed(Dense(H1, activation='relu'))(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True))(h0)
-        h2 = TimeDistributed(Dense(1, activation='relu'), name=name+'_output')(h1)
+        h2 = TimeDistributed(Dense(1, activation='linear'), name=name+'_output')(h1)
         out = h2
         model = Model(inputs=[S,A], outputs=out)
         adam = Adam(lr=LR)
