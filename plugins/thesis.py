@@ -137,6 +137,7 @@ def preupdate():
         agent.update_replay_memory(state, reward, done, new_state)
         if agent.replay_memory.num_experiences > agent.batch_size:
             agent.train()
+        agent.write_summaries(reward)
 
     agent.act(new_state)
 
@@ -222,6 +223,8 @@ class Agent:
         self.max_agents = 80
         self.action = []
         self.memory_size = 10000
+        self.i = 0
+
 
 
         self.batch_size = 4
@@ -254,6 +257,12 @@ class Agent:
         except:
             print("Cannot find the weights")
 
+        # Set up summary Ops
+        self.summary_ops, self.summary_vars = self.build_summaries()
+
+        self.sess.run(tf.global_variables_initializer())
+        summary_dir = './output/tf_summaries/'
+        self.writer = tf.summary.FileWriter(summary_dir, self.sess.graph)
 
     def pad_zeros(self, array, max_timesteps):
         if array.shape[0] == max_timesteps:
@@ -262,6 +271,23 @@ class Agent:
             result = np.zeros((max_timesteps, array.shape[1]))
             result[:array.shape[0], :] = array
             return result
+
+    def build_summaries(self):
+        episode_reward = tf.Variable(0.)
+        tf.summary.scalar("Reward", episode_reward)
+        # episode_ave_max_q = tf.Variable(0.)
+        # tf.summary.scalar("Qmax Value", episode_ave_max_q)
+        summary_vars = [episode_reward]# , episode_ave_max_q]
+        summary_ops = tf.summary.merge_all()
+        return summary_ops, summary_vars
+
+    def write_summaries(self, reward):
+        summary_str = self.sess.run(self.summary_ops, feed_dict={
+            self.summary_vars[0]: np.sum(reward),
+                    })
+        self.writer.add_summary(summary_str, self.i)
+        self.writer.flush()
+        self.i += 1
 
     def train(self):
         batch = self.replay_memory.getBatch(self.batch_size)
@@ -306,6 +332,7 @@ class Agent:
             self.actor.update_target_network()
             self.critic.update_target_network()
             print("training epoch succesful")
+
 
     def update_replay_memory(self, state, reward, done, new_state):
         self.replay_memory.add(state, self.action, reward, new_state, done)
