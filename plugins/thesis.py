@@ -264,22 +264,21 @@ class Agent:
             return result
 
     def train(self):
-        # Do the batch update
         batch = self.replay_memory.getBatch(self.batch_size)
-        for e in batch:
-            print(e[0].shape)
+        for seq in batch:
+            print(seq[0].shape)
 
         # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
         # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
         # calculations
-        sequence_length = [e[0].shape[0] for e in batch]
+        sequence_length = [seq[0].shape[0] for seq in batch]
         max_t = max(sequence_length)
 
-        states = np.asarray([self.pad_zeros(e[0], max_t) for e in batch])
-        actions = np.asarray([self.pad_zeros(e[1], max_t) for e in batch])
-        rewards = np.asarray([self.pad_zeros(e[2], max_t) for e in batch])
-        new_states = np.asarray([self.pad_zeros(e[3], max_t) for e in batch])
-        dones = np.asarray([e[4] for e in batch])
+        states = np.asarray([self.pad_zeros(seq[0], max_t) for seq in batch])
+        actions = np.asarray([self.pad_zeros(seq[1], max_t) for seq in batch])
+        rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
+        new_states = np.asarray([self.pad_zeros(seq[3], max_t) for seq in batch])
+        dones = np.asarray([seq[4] for seq in batch])
         y_t = actions.copy()
 
         # print(states.shape, states)
@@ -299,12 +298,13 @@ class Agent:
 
         if self.train_indicator:
             print(states.shape, actions.shape, y_t.shape)
-            self.loss += self.critic.model.train_on_batch([states, actions], y_t)
-            a_for_grad = self.actor.model.predict(states)
-            grads = self.critic.gradients(states, a_for_grad)
+            # self.loss += self.critic.model.train_on_batch([states, actions], y_t)
+            actions_for_grad = self.actor.model.predict(states)
+            grads = self.critic.gradients(states, actions_for_grad)
+            self.critic.train(states, actions_for_grad, y_t)
             self.actor.train(states, grads)
-            self.actor.target_train()
-            self.critic.target_train()
+            self.actor.update_target_network()
+            self.critic.update_target_network()
             print("training epoch succesful")
 
     def update_replay_memory(self, state, reward, done, new_state):

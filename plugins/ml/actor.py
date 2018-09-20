@@ -28,7 +28,7 @@ class ActorNetwork(object):
             self.action_gradient: action_grads
         })
 
-    def target_train(self):
+    def update_target_network(self):
         actor_weights = self.model.get_weights()
         actor_target_weights = self.target_model.get_weights()
         for i in np.arange(len(actor_weights)):

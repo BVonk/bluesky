@@ -24,10 +24,11 @@ class BiCNet:
         h0 = TimeDistributed(Dense(H1, activation='relu'))(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True))(h0)
         h2 = TimeDistributed(Dense(1, activation='relu'), name=name+'_output')(h1)
-        model = Model(inputs=[S,A], outputs=h2)
+        out = h2
+        model = Model(inputs=[S,A], outputs=out)
         adam = Adam(lr=LR)
         model.compile(loss='mse', optimizer=adam)
-        return model, A, S
+        return model, out, A, S
 
 
 if __name__ == '__main__':
