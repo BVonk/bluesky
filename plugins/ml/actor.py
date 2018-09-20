@@ -13,12 +13,14 @@ class ActorNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model , self.weights, self.state = BiCNet.build_actor(None, state_size, action_size, 64, 64, 'actor')
-        self.target_model, self.target_weights, self.target_state = BiCNet.build_actor(None, state_size, action_size, 64, 64, 'actor_target')
+        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(None, state_size, action_size, 64, 64, 'actor')
+        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(None, state_size, action_size, 64, 64, 'actor_target')
         self.action_gradient = tf.placeholder(tf.float32,[None, None, action_size])
         # Negative action gradients are used for gradient ascent.
-        self.params_grad = tf.gradients(self.model.output, self.weights, -self.action_gradient)
-        grads = zip(self.params_grad, self.weights)
+        self.unnormalized_actor_gradients = tf.gradients(self.model.output, self.weights, -self.action_gradient)
+        self.actor_gradients = list(map(lambda x: tf.div(x, self.BATCH_SIZE), self.unnormalized_actor_gradients))
+
+        grads = zip(self.unnormalized_actor_gradients, self.weights)
         self.optimize = tf.train.AdamOptimizer(LEARNING_RATE).apply_gradients(grads)
         self.sess.run(tf.global_variables_initializer())
 

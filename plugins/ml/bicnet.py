@@ -11,8 +11,9 @@ class BiCNet:
         h0 = TimeDistributed(Dense(H1, activation='relu'))(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True))(h0)
         h2 = TimeDistributed(Dense(act_dim, activation='relu', name=name+'_output'))(h1)
-        model = Model(inputs=S, outputs=h2)
-        return model, model.trainable_weights, S
+        out = h2
+        model = Model(inputs=S, outputs=out)
+        return model, model.trainable_weights, out, S
 
     @staticmethod
     def build_critic(max_agents, obs_dim, act_dim, H1, H2, LR, name):
