@@ -327,7 +327,7 @@ class Agent:
             # self.loss += self.critic.model.train_on_batch([states, actions], y_t)
             actions_for_grad = self.actor.model.predict(states)
             grads = self.critic.gradients(states, actions_for_grad)
-            self.critic.train(states, actions_for_grad, y_t)
+            self.critic.train(states, actions, y_t)
             self.actor.train(states, grads)
             self.actor.update_target_network()
             self.critic.update_target_network()
@@ -419,7 +419,7 @@ class Agent:
 
         # Produce action command
         # Get the number of segments in main route index and construct
-        maxsegments = 4 # Dummy to replace
+        maxsegments = 4 #TODO: Dummy to replace
 
         # Action is already selected. Just generate the commands ;)
 
