@@ -49,6 +49,7 @@ output/
 *.egg-info/
 .installed.cfg
 *.egg
+*.tfevents*
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
