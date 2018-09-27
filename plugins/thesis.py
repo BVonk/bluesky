@@ -16,6 +16,7 @@ from bluesky.tools.aero import nm, g0
 from plugins.ml.actor import ActorNetwork
 from plugins.ml.critic import CriticNetwork
 from plugins.ml.ReplayMemory import ReplayMemory
+from plugins.ml.normalizer import Normalizer
 
 
 from plugins.vierd import ETA
@@ -25,7 +26,7 @@ import random
 import numpy as np
 import os
 from collections import deque
-from keras.models import Sequential, Model
+from keras.models import Sequential, Model, model_from_yaml
 from keras.layers import Dense, Dropout, Input, RepeatVector, Lambda
 from keras.optimizers import Adam, RMSprop
 from keras.layers.merge import Add, Multiply, Subtract
@@ -134,6 +135,7 @@ def preupdate():
     else:
         # Construct new state
         state, reward, new_state, done = env.step()
+        # print(agent.replay_memory.count(), state)
         agent.update_replay_memory(state, reward, done, new_state)
         if agent.replay_memory.num_experiences > agent.batch_size:
             agent.train()
@@ -170,13 +172,18 @@ def get_routes():
         routes[j] = a
     # print(routes)
 
+
+
+
 class Environment:
     def __init__(self):
         self.n_aircraft = traf.ntraf
+        self.state_size = 5
         self.ac_dict = {}
         self.prev_traf = 0
-        self.observation = []
+        self.observation = np.zeros((1,self.state_size))
         self.done = False
+        self.state_normalizer = Normalizer(self.state_size)
         for id in traf.id:
             self.ac_dict[id]= [0,0,0]
 
@@ -186,7 +193,7 @@ class Environment:
 
     def step(self):
         prev_observation = self.observation
-        self.generate_observation()
+        self.observation = self.generate_observation()
         # Check termination conditions
         self.check_termination()
         self.generate_reward()
@@ -199,7 +206,10 @@ class Environment:
 
     def generate_observation(self):
         # Produce a running average off all variables in the field with regard to the initial state convergence that is being tackled in the problem.
-        self.observation = np.array([traf.lat, traf.lon, traf.tas, traf.cas, traf.alt]).transpose()
+        obs = np.array([traf.lat, traf.lon, traf.tas, traf.cas, traf.alt]).transpose()
+        self.state_normalizer.observe(obs)
+        obs = self.state_normalizer.normalize(obs)
+        return obs
 
     def check_termination(self):
         self.done = False
@@ -275,6 +285,7 @@ class Agent:
     def build_summaries(self):
         episode_reward = tf.Variable(0.)
         tf.summary.scalar("Reward", episode_reward)
+        # tf.summary.histogram("Histogram", self.actor.weights)
         # episode_ave_max_q = tf.Variable(0.)
         # tf.summary.scalar("Qmax Value", episode_ave_max_q)
         summary_vars = [episode_reward]# , episode_ave_max_q]
@@ -289,9 +300,18 @@ class Agent:
         self.writer.flush()
         self.i += 1
 
+    def save_model(self, model, name):
+        #yaml saves the model architecture
+        model_yaml = model.to_yaml()
+        with open("{}.yaml".format(name), 'w') as yaml_file:
+            yaml_file.write(model_yaml)
+        #Serialize weights to HDF5 format
+        model.save_weights("{}.h5".format(name))
+
     def train(self):
         batch = self.replay_memory.getBatch(self.batch_size)
         for seq in batch:
+            print(seq)
             print(seq[0].shape)
 
         # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
