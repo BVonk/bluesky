@@ -19,11 +19,13 @@ from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
 
 
+
 from plugins.vierd import ETA
 
 import pickle
 import random
 import numpy as np
+import time
 import os
 from collections import deque
 from keras.models import Sequential, Model, model_from_yaml
@@ -37,10 +39,16 @@ import tensorflow as tf
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
-    global env, agent, update_interval
+    global env, agent, update_interval, routes, log_dir
     env = Environment()
     agent = Agent()
     update_interval = 10
+    routes = dict()
+
+    # Create logging folder
+    log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
     config = {
         # The name of your plugin
         'plugin_name':     'THESIS',
@@ -107,6 +115,7 @@ def update():
     # if agent.replay_memory.num_experiences > agent.batch_size:
     #     print('replay {}'.format(agent.replay_memory.num_experiences))
     #     agent.train()
+
     pass
 
 
@@ -119,17 +128,12 @@ def init():
 def preupdate():
     # Initialize routes
     if sim.simt < update_interval*1.5:
-        # init()
         new_state = env.init()
-        # stack.stack("CRE BART004, B737, 51.862982, 2.830079, 90, fl200, 150")
-        # stack.stack("BART004 DEST EHAM RWY06")
-        # stack.stack("BART004 VNAV ON")
+
 
     else:
         # Construct new state
         state, reward, new_state, done = env.step()
-        # print(agent.replay_memory.count(), state)
-        print('reward')
         agent.update_cumreward(reward)
         agent.update_replay_memory(state, reward, done, new_state)
         if agent.replay_memory.num_experiences > agent.batch_size:
@@ -139,6 +143,8 @@ def preupdate():
     agent.act(new_state)
     if env.done:
         # Reset environment states and agent states
+        if env.episode % 50==0:
+            agent.save_models(env.episode)
         env.reset()
         agent.reset()
 
@@ -150,7 +156,6 @@ def reset():
     pass
 
 
-# wptype 3 == Destination --> So check for that:
 def load_routes():
     wpts = np.loadtxt('plugins/ml/routes/testroute.txt')
     i=0
@@ -168,20 +173,27 @@ def get_routes():
         for k in range(int(wpts.shape[1]/2)):
            a.append('RL{}{}{}'.format(i, j, k))
         routes[j] = a
+
     # print(routes)
 
-
+def norm(data, axis=0):
+    ma = np.max(data, axis=axis)
+    mi = np.min(data, axis=axis)
+    return (data-mi)/(ma-mi)
 
 
 class Environment:
     def __init__(self):
         self.n_aircraft = traf.ntraf
-        self.state_size = 5
+        self.state_size = 9
         self.ac_dict = {}
         self.prev_traf = 0
         self.observation = np.zeros((1,self.state_size))
         self.done = False
         self.state_normalizer = Normalizer(self.state_size)
+        self.wp_db = self.load_waypoints()
+        self.episode = 1
+
         for id in traf.id:
             self.ac_dict[id]= [0,0,0]
 
@@ -210,33 +222,32 @@ class Environment:
     def generate_observation(self):
         # Produce a running average off all variables in the field with regard to the initial state convergence that is being tackled in the problem.
         obs = np.array([traf.lat, traf.lon, traf.tas, traf.cas, traf.alt]).transpose()
-        self.state_normalizer.observe(obs)
-        obs = self.state_normalizer.normalize(obs)
-        return obs
+        #self.state_normalizer.observe(obs)
+        #obs = self.state_normalizer.normalize(obs)
 
-        # def reached(self, qdr, dist, flyby):
-        #     # Calculate distance before waypoint where to start the turn
-        #     # Turn radius:      R = V2 tan phi / g
-        #     # Distance to turn: wpturn = R * tan (1/2 delhdg) but max 4 times radius
-        #     # using default bank angle per flight phase
-        #
-        #
-        #
-        #     # Avoid circling by checking for flying away
-        #     away = np.abs(degto180(bs.traf.trk % 360. - qdr % 360.)) > 90.  # difference large than 90
-        #
-        #     # Ratio between distance close enough to switch to next wp when flying away
-        #     # When within pro1 nm and flying away: switch also
-        #     proxfact = 1.01  # Turnradius scales this contant , factor => [turnrad]
-        #     incircle = dist < turnrad * proxfact
-        #     circling = away * incircle  # [True/False] passed wp,used for flyover as well
-        #     nonflyby = (flyby == 1) * away * (np.array(dist) < 1000)
-        #     #        print("NONFLYBY ", nonflyby)
-        #     # Check whether shift based dist is required, set closer than WP turn distance
-        #     swreached = np.where(bs.traf.swlnav * ((dist < self.turndist) + circling + nonflyby))[0]
-        #
-        #     # Return True/1.0 for a/c where we have reached waypoint
-        #     return swreached
+        #Get the normalized coordinates of the last and current waypoint.
+        coords = np.empty((traf.ntraf, 4))
+        for i in range(traf.ntraf):
+            ac = agent.ac_dict.get(traf.id[i])
+
+            if ac is None:
+                coords[i, 0:2] = np.array([0,0])
+                coords[i, 2:4] = np.array([0,0])
+            else:
+                lastwp = ac.lastwp
+                curwp = ac.curwp
+                if curwp == '':
+                    curwp = 'dummy'
+                if lastwp == '':
+                    lastwp = 'dummy'
+
+                print('lastwp', lastwp)
+                print(self.wp_db.get(lastwp))
+                coords[i, 0:2] = np.asarray(self.wp_db.get(lastwp))
+                coords[i, 2:4] = np.asarray(self.wp_db.get(curwp))
+        print('aaaa',coords)
+        obs = np.hstack((obs, coords))
+        return obs
 
     def check_reached(self):
         qdr, _ = qdrdist(traf.lat, traf.lon,
@@ -259,8 +270,35 @@ class Environment:
     def generate_commands(self):
         pass
 
+    def load_waypoints(self):
+        wpts = np.loadtxt('C:/Users/Bart/Documents/bluesky/plugins/ml/routes/testroute.txt')
+        rows = wpts.shape[0]
+        cols = wpts.shape[1]
+        wpts = wpts.reshape((int(rows * cols / 2), 2))
+        destidx = navdb.getaptidx('EHAM')
+        lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
+        wpts = np.vstack((wpts, np.array([lat,lon])))
+        wpts = norm(wpts, axis=0)
+        eham = wpts[-1,:]
+        wpts = wpts[:-1,:].reshape((rows, cols))
+        wp_db = dict()
+        i = 0
+        for j in range(wpts.shape[0]):
+            for k in range(int(wpts.shape[1] / 2)):
+                #               stack.stack('DEFWPT RL{}{}{}, {}, {}, FIX'.format(i, j, k, wpts[j,k*2], wpts[j,k*2+1]))
+                wp_db['RL{}{}{}'.format(i, j, k)] = [wpts[j, k * 2], wpts[j, k * 2 + 1]]
+        wp_db['EHAM'] = [eham[0], eham[1]]
+        wp_db['dummy']=[0,0]
+        print("wp_db")
+        print(wp_db)
+        print("")
+
+
+        return wp_db
+
     def reset(self):
         self.done = False
+        self.episode += 1
         stack.stack('open ./scenario/bart/BiCNet.SCN')
         load_routes()
 
@@ -272,7 +310,7 @@ class Agent:
         self.speed_values = [175, 200, 225, 250]
         self.wp_action_size = 3
         self.spd_action_size = len(self.speed_values)
-        self.state_size = 5
+        self.state_size = 9
         #TODO: Set the correct action size to correspond with the desired action output and neural network architecture
         self.action_size = self.wp_action_size * self.spd_action_size
         self.max_agents = None
@@ -318,7 +356,7 @@ class Agent:
         self.summary_ops, self.summary_vars = self.build_summaries()
 
         self.sess.run(tf.global_variables_initializer())
-        summary_dir = './output/tf_summaries/'
+        summary_dir = log_dir
         self.writer = tf.summary.FileWriter(summary_dir, self.sess.graph)
 
     def pad_zeros(self, array, max_timesteps):
@@ -353,7 +391,13 @@ class Agent:
         with open("{}.yaml".format(name), 'w') as yaml_file:
             yaml_file.write(model_yaml)
         #Serialize weights to HDF5 format
-        model.save_weights("{}.h5".format(name))
+        model.save_weights("{}.h5".format(name))\
+
+    def save_models(self, episode):
+        self.save_model(self.actor.model, log_dir+'actor_model{0:05d}'.format(episode))
+        self.save_model(self.actor.target_model, log_dir+'target_actor_model{0:05d}'.format(episode))
+        self.save_model(self.critic.model, log_dir+'critic_model{0:05d}'.format(episode))
+        self.save_model(self.critic.target_model, log_dir+'target_critic_model{0:05d}'.format(episode))
 
     def train(self):
         batch = self.replay_memory.getBatch(self.batch_size)
@@ -391,7 +435,7 @@ class Agent:
                 # print(rewards[k].shape, target_q_values[k].shape, y_t[k].shape)
                 y_t[k] = rewards[k] + self.gamma * target_q_values[k]
 
-        print('y_t', y_t.shape)
+        # print('y_t', y_t.shape)
         if self.train_indicator:
             # print(states.shape, actions.shape, y_t.shape)
             # self.loss += self.critic.model.train_on_batch([states, actions], y_t)
@@ -406,7 +450,7 @@ class Agent:
 
     def update_replay_memory(self, state, reward, done, new_state):
         max_t = state.shape[0]
-        print('update_replay', state.shape, reward.shape, self.action.reshape(max_t, self.action_size).shape, self.mask.reshape(max_t, self.action_size).shape)
+        # print('update_replay', state.shape, reward.shape, self.action.reshape(max_t, self.action_size).shape, self.mask.reshape(max_t, self.action_size).shape)
         self.replay_memory.add(state, self.action.reshape(max_t, self.action_size), reward, new_state, done, self.mask.reshape(max_t, self.action_size))
 
     def __update_aircraft_waypoints(self):
@@ -418,11 +462,12 @@ class Agent:
         for i in np.arange(traf.ntraf):
 
             actwp = traf.ap.route[i].iactwp
-            if traf.ap.route[i].wptype[actwp] == 3:
-                ac_values = self.ac_dict.get(traf.id[i])
-                ac_values[0] = 1
-                self.ac_dict[traf.id[i]] = [traf.id[i]]
-
+            ac = self.ac_dict.get(traf.id[i])
+            if traf.ap.route[i].wptype[actwp] == 3 and actwp<ac.route_length:
+                ac.set_wp_flag(1)
+                self.ac_dict[traf.id[i]] = ac
+            elif traf.ap.route[i].wptype[actwp] == 3 and actwp >= ac.route_length:
+                ac.set_dest_flag(1)
         # return list of waypoints
 
 
@@ -435,7 +480,7 @@ class Agent:
         for id in traf.id:
             # print(traf.id)
             if id not in self.ac_dict:
-                self.ac_dict[id]=[1,[0,0,0]]
+                self.ac_dict[id]=Aircraft(id)
         # If aircraft sizes are not equal then aircraft also have to be deleted
         if len(self.ac_dict) < traf.ntraf:
             for key in self.ac_dict.keys():
@@ -458,11 +503,13 @@ class Agent:
         """
         actionmask = np.zeros((traf.ntraf, self.spd_action_size, self.wp_action_size))
         for i in np.arange(traf.ntraf):
-            value = self.ac_dict.get(traf.id[i])
-            # If an aircraft does not need a new action [value[0] = 0] so the current action is maintained
-            if value[0]==0:
-                print('value', value[1][2])
-                actionmask[i, value[1][2], :]=1
+            aircraft = self.ac_dict.get(traf.id[i])
+            # If an aircraft does not need a new action only speed changes while flying towards the current waypoint are
+            # allowed. Otherwise all actions are allowed.
+            if aircraft.dest_flag == 1:
+                actionmask[i,:,0] = 1
+            elif aircraft.wpflag == 0:
+                actionmask[i, :, aircraft.k] = 1
             else:
                 actionmask[i,:,:]=1
 
@@ -473,8 +520,8 @@ class Agent:
         # Select actions for each aircraft
         self.__update_acdict_entries()
         # print(self.ac_dict)
-        # __update_aircraft_waypoints()
-        print(self.ac_dict)
+        self.__update_aircraft_waypoints()
+        # print(self.ac_dict)
         # Infer action selection
         # self.action = np.random.random((traf.ntraf, 1))
         # actions are grouped per as follows
@@ -492,15 +539,15 @@ class Agent:
 
         # Retrieve mask for action selection
         self.mask = self.get_mask()
-
+        # self.mask = np.array([[[1,1,1,0,0,0,0,0,0,0,0,0]]])
         self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size)), self.mask])
         print('action_shape', self.action.shape, self.action)
         print('mask', self.mask)
         print(self.action[0,0,:])
         action = np.zeros((traf.ntraf, 1))
         for i in range(traf.ntraf):
-            action[i] = np.random.choice(a=np.arange(self.action_size), p=self.action[0,i,:])
-
+            #action[i] = np.random.choice(a=np.arange(self.action_size), p=self.action[0,i,:])
+            action[i] = np.random.choice(a=np.arange(self.action_size), p=np.abs(self.action[0, i, :]))
         # print(mask)
 
         # Select action
@@ -527,22 +574,32 @@ class Agent:
 
         for i in np.arange(traf.ntraf):
             # Set wpindex
-            ac_name = traf.id[i]
-            wp_values = self.ac_dict.get(ac_name)
+            ac = self.ac_dict.get(traf.id[i])
             # Only add wpts to route if required
             actwp = traf.ap.route[i].iactwp
-            if traf.ap.route[i].wptype[actwp] == 3: # actwp == 3 corresponds to destination
-                wp_name = wp_values[1]
+
+            if ac.wpflag==1: # actwp == 3 corresponds to destination
+                print('Destination', traf.ap.route[i].wpname[-1])
+                wp_name = [ac.i, ac.j, ac.k]
+                print('wp_name0', wp_name)
                 wp_name[2] = int(wp_ind[i])
-                self.ac_dict[traf.id[i]] = [0, wp_name]
-                stack.stack("{} ADDWPT RL{}".format(ac_name,  ''.join(map(str, wp_name))))
-                wp_name[1] = wp_name[1] + 1
+                wpt = 'RL{}'.format(''.join(map(str, wp_name)))
+                stack.stack("{} ADDWPT {}".format(ac.id,  wpt))
+                ac.set_k(int(wp_ind[i]))
+                ac.increment_j()
+                ac.set_wp_flag(0)
+                print('wp_name1', wp_name)
+                ac.set_wp(wpt)
+                self.ac_dict[traf.id[i]] = ac
+
+            elif actwp>=ac.route_length and ac.curwp!='EHAM':
+                dest='EHAM'
+                ac.set_wp(dest)
 
             # Create speed command
-            stack.stack("{} SPD {}".format(ac_name, speed_actions[i]))
+            stack.stack("{} SPD {}".format(ac.id, speed_actions[i]))
 
-        # Wp command stack.stack(callsign ADDWPT wpname)
-        # Spd command
+
     def update_cumreward(self, reward):
         self.cumreward += reward
 
@@ -551,9 +608,33 @@ class Agent:
         self.cumreward=0
         self.ac_dict={}
 
+class Aircraft():
+    def __init__(self, id):
+        self.lastwp = ''
+        self.curwp  = ''
+        self.i = 0
+        self.j = 0
+        self.k = 0
+        self.wpflag = 1
+        self.dest_flag = 0
+        self.id = id
+        self.route_length = 3
 
+    def set_wp(self, wp):
+        self.lastwp = self.curwp
+        self.curwp = wp
 
+    def set_wp_flag(self, x):
+        self.wpflag = x
 
+    def set_k(self, x):
+        self.k = x
+
+    def set_dest_flag(self, x):
+        self.dest_flag = x
+
+    def increment_j(self):
+        self.j += 1
 
 
 

@@ -1,7 +1,6 @@
 from keras.models import Model
-from keras.layers import Dense, Input, TimeDistributed, Bidirectional, LSTM, Concatenate, Masking, Activation, Multiply
+from keras.layers import Dense, Input, TimeDistributed, Bidirectional, LSTM, Concatenate, Masking, Activation, Multiply, Lambda
 from keras.optimizers import Adam
-import keras
 import tensorflow as tf
 
 class BiCNet:
@@ -14,11 +13,14 @@ class BiCNet:
         h0 = TimeDistributed(Dense(H1, activation='relu'))(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True))(h0)
         h2 = TimeDistributed(Dense(act_dim, activation='linear', name=name + '_output'))(h1)
-        out1 = TimeDistributed(Dense(act_dim, activation='linear', name=name+'_actionoutput'))(h1)
-        out2 = TimeDistributed(Dense(act_dim, activation='linear', name=name+'_speedoutput'))(h1)
-        h3 = Multiply()([h2, bool_mask])
-        actions = Activation('softmax', name=name+'_softmax')(h3)
-        out = actions
+        # out1 = TimeDistributed(Dense(act_dim, activation='linear', name=name+'_actionoutput'))(h1)
+        # out2 = TimeDistributed(Dense(act_dim, activation='linear', name=name+'_speedoutput'))(h1)
+
+        h3 = Activation('softmax', name=name+'_softmax')(h2)
+        actions = Multiply()([h3, bool_mask])
+        rescaled = Lambda(renormalized_mask_after_softmax)(actions)
+
+        out = rescaled
         model = Model(inputs=[S, bool_mask], outputs=out)
         return model, model.trainable_weights, out, S, bool_mask
 
@@ -39,8 +41,12 @@ class BiCNet:
         return model, out, A, S
 
 
+def renormalized_mask_after_softmax(x):
+    scale_factor = tf.divide(tf.constant(1, tf.float32), tf.reduce_sum(x))
+    rescaled = tf.scalar_mul(scale_factor, x)
+    return rescaled
+
 if __name__ == '__main__':
-    import tensorflow as tf
     tf.reset_default_graph()
     actor, _, _ = BiCNet.build_actor(80, 50, 5, 64 ,64)
     critic, _, _ = BiCNet.build_critic(80, 50, 5, 64, 64, 0.001)
