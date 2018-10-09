@@ -5,6 +5,8 @@ data/grib
 data/performance/BADA/*
 !/data/performance/BADA/README.md
 
+plugins/ml/testsummaries/
+
 # Sphinx documentation
 docs/_build/
 
