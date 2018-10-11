@@ -40,15 +40,17 @@ import tensorflow as tf
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
     global env, agent, update_interval, routes, log_dir
-    env = Environment()
-    agent = Agent()
-    update_interval = 10
-    routes = dict()
-
     # Create logging folder
     log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
+
+    env = Environment()
+    agent = Agent()
+    update_interval = 15
+    routes = dict()
+
+
     config = {
         # The name of your plugin
         'plugin_name':     'THESIS',
@@ -174,7 +176,6 @@ def get_routes():
            a.append('RL{}{}{}'.format(i, j, k))
         routes[j] = a
 
-    # print(routes)
 
 def norm(data, axis=0):
     ma = np.max(data, axis=axis)
@@ -214,7 +215,7 @@ class Environment:
         local_reward = np.ones((traf.ntraf,1))
         self.reward = local_reward + global_reward
         if self.done:
-            self.reward = 100 * np.ones((traf.ntraf,1))
+            self.reward = 60 * np.ones((traf.ntraf,1))
         else:
             self.reward = -1 * np.ones((traf.ntraf,1))
 
@@ -241,11 +242,8 @@ class Environment:
                 if lastwp == '':
                     lastwp = 'dummy'
 
-                print('lastwp', lastwp)
-                print(self.wp_db.get(lastwp))
                 coords[i, 0:2] = np.asarray(self.wp_db.get(lastwp))
                 coords[i, 2:4] = np.asarray(self.wp_db.get(curwp))
-        print('aaaa',coords)
         obs = np.hstack((obs, coords))
         return obs
 
@@ -258,9 +256,7 @@ class Environment:
         dest = np.asarray([traf.ap.route[i].wptype[traf.ap.route[i].iactwp] for i in range(traf.ntraf)]) == 3
         away = np.abs(degto180(traf.trk % 360. - qdr % 360.)) > 150.
         reached = np.where(away * dest)[0]
-        # reached = self.Reached(qdr, dist, traf.actwp.flyby)
-        # if reached!=[]:
-        #     print(reached)
+
         if reached==[0]:
             # TODO: Extend for multi-aircraft
             self.done = True
@@ -289,11 +285,6 @@ class Environment:
                 wp_db['RL{}{}{}'.format(i, j, k)] = [wpts[j, k * 2], wpts[j, k * 2 + 1]]
         wp_db['EHAM'] = [eham[0], eham[1]]
         wp_db['dummy']=[0,0]
-        print("wp_db")
-        print(wp_db)
-        print("")
-
-
         return wp_db
 
     def reset(self):
@@ -324,7 +315,7 @@ class Agent:
         self.tau = 0.9
         self.gamma = 0.99
         self.critic_learning_rate = 0.001
-        self.actor_learning_rate = 0.0001
+        self.actor_learning_rate = 0.001
         self.loss = 0
         self.cumreward=0
         self.train_indicator = True
@@ -335,7 +326,6 @@ class Agent:
         config.gpu_options.allow_growth = True
         config.allow_soft_placement = True
         self.sess = tf.Session(config=config)
-        # self.sess = tf.Session()
         K.set_session(self.sess)
 
         self.actor = ActorNetwork(self.sess, self.state_size, self.action_size, self.batch_size, self.tau, self.actor_learning_rate)
@@ -403,8 +393,6 @@ class Agent:
         batch = self.replay_memory.getBatch(self.batch_size)
         for seq in batch:
             pass
-            # print(seq)
-            # print(seq[0].shape)
 
         # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
         # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
@@ -420,32 +408,23 @@ class Agent:
         mask = np.asarray([self.pad_zeros(seq[5], max_t) for seq in batch])
         y_t = rewards.copy()
 
-        # print(states.shape, states)
-        # print('batch', batch)
-        # print('new_states - ', new_states.shape)
-        # print('predicted', self.actor.target_model.predict(new_states))
         target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict([new_states, mask])])
-        # print(target_q_values.shape)
 
         #Compute the target values
         for k in range(len(batch)):
             if dones[k]:
                 y_t[k] = rewards[k]
             else:
-                # print(rewards[k].shape, target_q_values[k].shape, y_t[k].shape)
                 y_t[k] = rewards[k] + self.gamma * target_q_values[k]
 
-        # print('y_t', y_t.shape)
         if self.train_indicator:
-            # print(states.shape, actions.shape, y_t.shape)
-            # self.loss += self.critic.model.train_on_batch([states, actions], y_t)
             actions_for_grad = self.actor.model.predict([states, mask])
             grads = self.critic.gradients(states, actions_for_grad)
             self.critic.train(states, actions, y_t)
             self.actor.train(states, mask, grads)
             self.actor.update_target_network()
             self.critic.update_target_network()
-            # print("training epoch succesful")
+
 
 
     def update_replay_memory(self, state, reward, done, new_state):
@@ -478,7 +457,6 @@ class Agent:
         x = 1 when aircraft must select new waypoint, otherwise 0
         """
         for id in traf.id:
-            # print(traf.id)
             if id not in self.ac_dict:
                 self.ac_dict[id]=Aircraft(id)
         # If aircraft sizes are not equal then aircraft also have to be deleted
@@ -517,51 +495,26 @@ class Agent:
 
 
     def act(self, state):
-        # Select actions for each aircraft
-        self.__update_acdict_entries()
-        # print(self.ac_dict)
-        self.__update_aircraft_waypoints()
-        # print(self.ac_dict)
         # Infer action selection
-        # self.action = np.random.random((traf.ntraf, 1))
         # actions are grouped per as follows
-
         #    Waypoints
         # s [[0, 1, 2, 3],
         # p [4, 5, 6, 7]
         # d [8, 9, 10, 11],
         #   [12, 13, 14, 15]]
-
-
-
-        wp_action = np.random.random((self.wp_action_size,traf.ntraf))
-        spd_action = np.random.random((self.spd_action_size,traf.ntraf))
+        self.__update_acdict_entries()
+        self.__update_aircraft_waypoints()
 
         # Retrieve mask for action selection
-        self.mask = self.get_mask()
-        # self.mask = np.array([[[1,1,1,0,0,0,0,0,0,0,0,0]]])
+        self.mask = self.get_mask() # self.mask = np.array([[[1,1,1,0,0,0,0,0,0,0,0,0]]])
         self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size)), self.mask])
-        print('action_shape', self.action.shape, self.action)
         print('mask', self.mask)
         print(self.action[0,0,:])
         action = np.zeros((traf.ntraf, 1))
         for i in range(traf.ntraf):
-            #action[i] = np.random.choice(a=np.arange(self.action_size), p=self.action[0,i,:])
-            action[i] = np.random.choice(a=np.arange(self.action_size), p=np.abs(self.action[0, i, :]))
-        # print(mask)
+            action[i] = np.random.choice(a=np.arange(self.action_size), p=self.action[0,i,:])
 
-        # Select action
-        # print(wp_action_masked)
-        # print(wp_action_masked)
-
-
-        # bool_mask = tf.placeholder(dtype=tf.bool, shape=)
-        # h2 = tf.boolean_mask(h2, bool_mask)
-        # h2 = tf.nn.softmax(h2, name)
-        print('action', action)
-        wp_ind = np.argmax(wp_action, axis=1) # wp_action_masked
         wp_ind = action % self.wp_action_size
-        spd_ind = np.argmax(spd_action, axis=1)
         spd_ind = np.floor(action / self.wp_action_size).astype(int)
         print('spd_ind', spd_ind)
         speed_actions = [self.speed_values[i[0]] for i in spd_ind]
@@ -579,16 +532,13 @@ class Agent:
             actwp = traf.ap.route[i].iactwp
 
             if ac.wpflag==1: # actwp == 3 corresponds to destination
-                print('Destination', traf.ap.route[i].wpname[-1])
                 wp_name = [ac.i, ac.j, ac.k]
-                print('wp_name0', wp_name)
                 wp_name[2] = int(wp_ind[i])
                 wpt = 'RL{}'.format(''.join(map(str, wp_name)))
                 stack.stack("{} ADDWPT {}".format(ac.id,  wpt))
                 ac.set_k(int(wp_ind[i]))
                 ac.increment_j()
                 ac.set_wp_flag(0)
-                print('wp_name1', wp_name)
                 ac.set_wp(wpt)
                 self.ac_dict[traf.id[i]] = ac
 
