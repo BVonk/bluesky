@@ -267,7 +267,7 @@ class Environment:
         pass
 
     def load_waypoints(self):
-        wpts = np.loadtxt('C:/Users/Bart/Documents/bluesky/plugins/ml/routes/testroute.txt')
+        wpts = np.loadtxt('plugins/ml/routes/testroute.txt')
         rows = wpts.shape[0]
         cols = wpts.shape[1]
         wpts = wpts.reshape((int(rows * cols / 2), 2))
