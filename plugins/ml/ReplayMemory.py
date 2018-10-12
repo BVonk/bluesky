@@ -19,7 +19,7 @@ class ReplayMemory():
     def size(self):
         return self.memory_size
 
-    def add(self, state, action, reward, new_state, done, mask):
+    def add(self, state, action, reward, new_state, done, mask=None):
         experience = (state, action, reward, new_state, done, mask)
         if self.num_experiences < self.memory_size:
             self.memory.append(experience)

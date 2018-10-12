@@ -8,7 +8,7 @@ Created on Thu Jun  7 10:35:02 2018
 """ Plugin to resolve conflicts """
 # Import the global bluesky objects. Uncomment the ones you need
 from bluesky import stack, sim  #, settings, navdb, traf, sim, scr, tools
-from bluesky.tools.geo import kwikdist, qdrpos, qdrdist
+from bluesky.tools.geo import kwikdist, qdrpos, qdrdist, qdrdist_matrix
 from bluesky.tools.misc import degto180
 from bluesky import traf
 from bluesky import navdb
@@ -17,6 +17,7 @@ from plugins.ml.actor import ActorNetwork
 from plugins.ml.critic import CriticNetwork
 from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
+from plugins.ml.OU import OrnsteinUhlenbeckActionNoise
 
 
 
@@ -47,7 +48,7 @@ def init_plugin():
 
     env = Environment()
     agent = Agent()
-    update_interval = 15
+    update_interval = 10
     routes = dict()
 
 
@@ -142,7 +143,7 @@ def preupdate():
             agent.train()
         # agent.write_summaries(reward)
 
-    agent.act(new_state)
+    agent.act_continuous(new_state)
     if env.done:
         # Reset environment states and agent states
         if env.episode % 50==0:
@@ -186,7 +187,7 @@ def norm(data, axis=0):
 class Environment:
     def __init__(self):
         self.n_aircraft = traf.ntraf
-        self.state_size = 9
+        self.state_size = 5
         self.ac_dict = {}
         self.prev_traf = 0
         self.observation = np.zeros((1,self.state_size))
@@ -199,12 +200,12 @@ class Environment:
             self.ac_dict[id]= [0,0,0]
 
     def init(self):
-        self.observation = self.generate_observation()
+        self.observation = self.generate_observation_continuous()
         return self.observation
 
     def step(self):
         prev_observation = self.observation
-        self.observation = self.generate_observation()
+        self.observation = self.generate_observation_continuous()
         # Check termination conditions
         self.check_reached()
         self.generate_reward()
@@ -220,7 +221,15 @@ class Environment:
             self.reward = -1 * np.ones((traf.ntraf,1))
 
 
-    def generate_observation(self):
+    def generate_observation_continuous(self):
+        destidx = navdb.getaptidx('EHAM')
+        lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
+        qdr, dist = qdrdist_matrix(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
+        obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist]).transpose()
+        return obs
+
+
+    def generate_observation_discrete(self):
         # Produce a running average off all variables in the field with regard to the initial state convergence that is being tackled in the problem.
         obs = np.array([traf.lat, traf.lon, traf.tas, traf.cas, traf.alt]).transpose()
         #self.state_normalizer.observe(obs)
@@ -248,14 +257,15 @@ class Environment:
         return obs
 
     def check_reached(self):
-        qdr, _ = qdrdist(traf.lat, traf.lon,
+        qdr, dist = qdrdist(traf.lat, traf.lon,
                                 traf.actwp.lat, traf.actwp.lon)  # [deg][nm])
 
         # check which aircraft have reached their destination by checkwaypoint type = 3 (destination) and the relative
         # heading to this waypoint is exceeding 150
         dest = np.asarray([traf.ap.route[i].wptype[traf.ap.route[i].iactwp] for i in range(traf.ntraf)]) == 3
         away = np.abs(degto180(traf.trk % 360. - qdr % 360.)) > 150.
-        reached = np.where(away * dest)[0]
+        dist = dist<2
+        reached = np.where(away * dest * dist)[0]
 
         if reached==[0]:
             # TODO: Extend for multi-aircraft
@@ -301,15 +311,15 @@ class Agent:
         self.speed_values = [175, 200, 225, 250]
         self.wp_action_size = 3
         self.spd_action_size = len(self.speed_values)
-        self.state_size = 9
+        self.state_size = 5
         #TODO: Set the correct action size to correspond with the desired action output and neural network architecture
-        self.action_size = self.wp_action_size * self.spd_action_size
+        self.action_size = 1 #self.wp_action_size * self.spd_action_size
         self.max_agents = None
         self.action = []
         self.memory_size = 10000
         self.i = 0
 
-
+        self.OU = OrnsteinUhlenbeckActionNoise(mu=np.array([0]))
 
         self.batch_size = 32
         self.tau = 0.9
@@ -405,10 +415,10 @@ class Agent:
         rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
         new_states = np.asarray([self.pad_zeros(seq[3], max_t) for seq in batch])
         dones = np.asarray([seq[4] for seq in batch])
-        mask = np.asarray([self.pad_zeros(seq[5], max_t) for seq in batch])
+        # mask = np.asarray([self.pad_zeros(seq[5], max_t) for seq in batch])
         y_t = rewards.copy()
 
-        target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict([new_states, mask])])
+        target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict(new_states)])
 
         #Compute the target values
         for k in range(len(batch)):
@@ -418,10 +428,10 @@ class Agent:
                 y_t[k] = rewards[k] + self.gamma * target_q_values[k]
 
         if self.train_indicator:
-            actions_for_grad = self.actor.model.predict([states, mask])
+            actions_for_grad = self.actor.model.predict(states)
             grads = self.critic.gradients(states, actions_for_grad)
             self.critic.train(states, actions, y_t)
-            self.actor.train(states, mask, grads)
+            self.actor.train(states, grads)
             self.actor.update_target_network()
             self.critic.update_target_network()
 
@@ -430,7 +440,7 @@ class Agent:
     def update_replay_memory(self, state, reward, done, new_state):
         max_t = state.shape[0]
         # print('update_replay', state.shape, reward.shape, self.action.reshape(max_t, self.action_size).shape, self.mask.reshape(max_t, self.action_size).shape)
-        self.replay_memory.add(state, self.action.reshape(max_t, self.action_size), reward, new_state, done, self.mask.reshape(max_t, self.action_size))
+        self.replay_memory.add(state, self.action.reshape(max_t, self.action_size), reward, new_state, done)
 
     def __update_aircraft_waypoints(self):
         """
@@ -493,8 +503,47 @@ class Agent:
 
         return actionmask.reshape(1, traf.ntraf, self.action_size)
 
+    def act_continuous(self, state):
+        # self.__update_acdict_entries()
+        self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size))]) + self.OU()
+        print('actionstate', self.action, state)
+        #Apply gaussian here to sample from to get action values
+        mu = 0
+        sigma = 0.5
+        y_offset = 0.107982 + 6.69737e-08
+        action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
 
-    def act(self, state):
+        # Due to exploratio noise action could drop below 0
+        action[np.where(action<0)[0]]=0
+
+        dist_limit = 5 #nm
+        dist = state[:, 4].transpose()
+        dist = dist.reshape(action.shape)
+        mul_factor = 90*np.ones(dist.shape)
+
+        print(mul_factor.shape, dist.shape)
+        wheredist = np.where(dist<dist_limit)[0]
+        mul_factor[wheredist] = dist[wheredist] / dist_limit * 90
+        minus = np.where(self.action<0)[0]
+        plus = np.where(self.action>=0)[0]
+        dheading = np.zeros(action.shape)
+        print(dheading.shape, minus.shape, mul_factor.shape, action.shape)
+        dheading[minus] = (action[minus] - 1) * mul_factor[minus]
+        dheading[plus] = np.abs(action[plus]-1) * mul_factor[plus]
+        print('selfaction', self.action)
+        print('dheading', dheading)
+        action[minus] = -1*action[minus]
+        qdr = state[:,3].transpose()
+        print('qdr', qdr)
+        heading =  qdr + dheading
+        print('heading action', heading)
+        for i in np.arange(traf.ntraf):
+            stack.stack('HDG {} {}'.format(traf.id[i], heading[0][i]))
+
+
+
+
+    def act_discrete(self, state):
         # Infer action selection
         # actions are grouped per as follows
         #    Waypoints
@@ -508,8 +557,9 @@ class Agent:
         # Retrieve mask for action selection
         self.mask = self.get_mask() # self.mask = np.array([[[1,1,1,0,0,0,0,0,0,0,0,0]]])
         self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size)), self.mask])
-        print('mask', self.mask)
-        print(self.action[0,0,:])
+        self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size))])
+        # print('mask', self.mask)
+        # print(self.action[0,0,:])
         action = np.zeros((traf.ntraf, 1))
         for i in range(traf.ntraf):
             action[i] = np.random.choice(a=np.arange(self.action_size), p=self.action[0,i,:])
@@ -586,6 +636,10 @@ class Aircraft():
     def increment_j(self):
         self.j += 1
 
-
-
-
+def bell_curve(x, mu=0., sigma=1., y_offset=0, scaled=1):
+    # Computes Gaussian and scales the peak to 1.
+    y = 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-np.power(x - mu, 2) / (2 * sigma ** 2)) + y_offset
+    if scaled:
+        y_scale = 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-np.power(0, 2) / (2 * sigma ** 2)) + y_offset
+        y = y/y_scale
+    return y

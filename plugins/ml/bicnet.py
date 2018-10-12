@@ -5,7 +5,7 @@ import tensorflow as tf
 
 class BiCNet:
     @staticmethod
-    def build_actor(max_agents, obs_dim, act_dim, H1, H2, name):
+    def build_actor(max_agents, obs_dim, act_dim, H1, H2, name, config='continuous'):
         S = Input(shape=(max_agents, obs_dim), name=name+'_input_states')
         bool_mask = Input(shape =(max_agents, act_dim), dtype=tf.float32, name=name+'_bool_mask')
         # Set the masking value to ignore 0 padded sequence inputs.
@@ -16,13 +16,21 @@ class BiCNet:
         # out1 = TimeDistributed(Dense(act_dim, activation='linear', name=name+'_actionoutput'))(h1)
         # out2 = TimeDistributed(Dense(act_dim, activation='linear', name=name+'_speedoutput'))(h1)
 
-        h3 = Activation('softmax', name=name+'_softmax')(h2)
+        h3 = Activation('tanh', name=name+'_softmax')(h2)
         actions = Multiply()([h3, bool_mask])
         rescaled = Lambda(renormalized_mask_after_softmax)(actions)
 
-        out = rescaled
-        model = Model(inputs=[S, bool_mask], outputs=out)
-        return model, model.trainable_weights, out, S, bool_mask
+        if config=='discrete':
+            out = rescaled
+            model = Model(inputs=[S, bool_mask], outputs=out)
+            return model, model.trainable_weights, out, S, bool_mask
+        elif config=='continuous':
+            out = h3
+            model = Model(inputs=S, outputs=out)
+            return model, model.trainable_weights, out, S
+
+
+
 
     @staticmethod
     def build_critic(max_agents, obs_dim, act_dim, H1, H2, LR, name):

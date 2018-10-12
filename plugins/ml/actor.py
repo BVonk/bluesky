@@ -14,9 +14,9 @@ class ActorNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model, self.weights, self.actions,  self.state, self.mask = BiCNet.build_actor(None, state_size, action_size, 16, 16, 'actor')
+        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(None, state_size, action_size, 16, 16, 'actor')
         print(self.model.summary())
-        self.target_model, self.target_weights, self.target_actions, self.target_state, self.target_mask = BiCNet.build_actor(None, state_size, action_size, 16, 16, 'actor_target')
+        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(None, state_size, action_size, 16, 16, 'actor_target')
         self.action_gradient = tf.placeholder(tf.float32,[None, None, action_size])
         # Negative action gradients are used for gradient ascent.
         self.unnormalized_actor_gradients = tf.gradients(self.model.output, self.weights, -self.action_gradient)
@@ -40,10 +40,10 @@ class ActorNetwork(object):
 
         # print(self.state.shape)
 
-    def train(self, states, mask, action_grads):
+    def train(self, states, action_grads):
         self.sess.run(self.optimize, feed_dict={
             self.state: states,
-            self.mask: mask,
+            # self.mask: mask,
             self.action_gradient: action_grads
         })
 
