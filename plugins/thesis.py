@@ -263,10 +263,10 @@ class Environment:
         # check which aircraft have reached their destination by checkwaypoint type = 3 (destination) and the relative
         # heading to this waypoint is exceeding 150
         dest = np.asarray([traf.ap.route[i].wptype[traf.ap.route[i].iactwp] for i in range(traf.ntraf)]) == 3
-        away = np.abs(degto180(traf.trk % 360. - qdr % 360.)) > 150.
-        dist = dist<2
-        reached = np.where(away * dest * dist)[0]
-
+        away = np.abs(degto180(traf.trk % 360. - qdr % 360.)) > 100.
+        d = dist<2
+        reached = np.where(away * dest * d)[0]
+        print('track', traf.trk, qdr, dist)
         if reached==[0]:
             # TODO: Extend for multi-aircraft
             self.done = True
@@ -319,7 +319,7 @@ class Agent:
         self.memory_size = 10000
         self.i = 0
 
-        self.OU = OrnsteinUhlenbeckActionNoise(mu=np.array([0]))
+        self.OU = OrnsteinUhlenbeckActionNoise(np.array([0]), sigma=0.15, theta=.5, dt=0.1)
 
         self.batch_size = 32
         self.tau = 0.9
@@ -505,15 +505,24 @@ class Agent:
 
     def act_continuous(self, state):
         # self.__update_acdict_entries()
-        self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size))]) + self.OU()
-        print('actionstate', self.action, state)
-        #Apply gaussian here to sample from to get action values
+        self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size))])
+        noise = self.OU()
+        print('action {}, noise {}'.format(self.action, noise))
+
+        # Add exploration noise and clip to range [-1, 1] for action space
+        self.action = self.action + noise
+        self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
+        self.action = np.minimum(np.ones(self.action.shape), self.action)
+
+
+        # print('actionstate', self.action, state)
+        # Apply Bell curve here to sample from to get action values
         mu = 0
         sigma = 0.5
         y_offset = 0.107982 + 6.69737e-08
         action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
 
-        # Due to exploratio noise action could drop below 0
+        # Due to exploration noise action could drop below 0
         action[np.where(action<0)[0]]=0
 
         dist_limit = 5 #nm
