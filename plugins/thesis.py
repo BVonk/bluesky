@@ -401,8 +401,6 @@ class Agent:
 
     def train(self):
         batch = self.replay_memory.getBatch(self.batch_size)
-        for seq in batch:
-            pass
 
         # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
         # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
