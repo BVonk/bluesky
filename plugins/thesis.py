@@ -41,14 +41,22 @@ import tensorflow as tf
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
     global env, agent, update_interval, routes, log_dir
+
     # Create logging folder
-    log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
+    log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S'))
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
+        os.makedirs(log_dir+'training/')
+        os.makedirs(log_dir+'test/')
 
-    env = Environment()
-    agent = Agent()
+
+    # config
+    state_size = 5
+    action_size = 1
     update_interval = 10
+    training = False
+    agent = Agent(state_size, action_size, training)
+    env = Environment(state_size)
     routes = dict()
 
 
@@ -121,8 +129,6 @@ def update():
 
     pass
 
-
-
 def init():
     # load_routes()
     pass
@@ -185,9 +191,9 @@ def norm(data, axis=0):
 
 
 class Environment:
-    def __init__(self):
+    def __init__(self, state_size):
         self.n_aircraft = traf.ntraf
-        self.state_size = 5
+        self.state_size = state_size
         self.ac_dict = {}
         self.prev_traf = 0
         self.observation = np.zeros((1,self.state_size))
@@ -306,21 +312,11 @@ class Environment:
 
 
 class Agent:
-    def __init__(self):
-        self.ac_dict = {}
-        self.speed_values = [175, 200, 225, 250]
-        self.wp_action_size = 3
-        self.spd_action_size = len(self.speed_values)
-        self.state_size = 5
-        #TODO: Set the correct action size to correspond with the desired action output and neural network architecture
-        self.action_size = 1 #self.wp_action_size * self.spd_action_size
-        self.max_agents = None
-        self.action = []
-        self.memory_size = 10000
-        self.i = 0
-
-        self.OU = OrnsteinUhlenbeckActionNoise(np.array([0]), sigma=0.15, theta=.5, dt=0.1)
-
+    def __init__(self, state_size, action_size, training):
+        # Config parameters
+        self.train_indicator = training
+        self.action_size = action_size
+        self.state_size = state_size
         self.batch_size = 32
         self.tau = 0.9
         self.gamma = 0.99
@@ -328,10 +324,23 @@ class Agent:
         self.actor_learning_rate = 0.001
         self.loss = 0
         self.cumreward=0
-        self.train_indicator = True
+        self.max_agents = None
+        self.OU = OrnsteinUhlenbeckActionNoise(np.array([0]), sigma=0.15, theta=.5, dt=0.1)
+        self.memory_size = 10000
 
+        self.load_dir = 'output/20181018_150403-2.1/'
+        self.load_ep  = '07500'
 
+        self.ac_dict = {}
+        self.speed_values = [175, 200, 225, 250]
+        self.wp_action_size = 3
+        self.spd_action_size = len(self.speed_values)
 
+        #TODO: Set the correct action size to correspond with the desired action output and neural network architecture
+         #self.wp_action_size * self.spd_action_size
+
+        self.action = []
+        self.summary_counter = 0
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         config.allow_soft_placement = True
@@ -343,20 +352,24 @@ class Agent:
         self.replay_memory = ReplayMemory(self.memory_size)
 
         #Now load the weight
-        try:
-            self.actor.model.load_weights("actormodel.h5")
-            self.critic.model.load_weights("criticmodel.h5")
-            self.actor.target_model.load_weights("actormodel.h5")
-            self.critic.target_model.load_weights("criticmodel.h5")
-            print("Weights load successfully")
-        except:
-            print("Cannot find the weights")
+        if not self.train_indicator:
+            try:
+                self.actor.model.load_weights(self.load_dir + "actor_model" + self.load_ep + ".h5")
+                self.critic.model.load_weights(self.load_dir + "critic_model" + self.load_ep + ".h5")
+                self.actor.target_model.load_weights(self.load_dir + "target_actor_model" + self.load_ep + ".h5")
+                self.critic.target_model.load_weights(self.load_dir + "target_critic_model" + self.load_ep + ".h5")
+                print("Weights load successfully")
+            except:
+                print("Cannot find the weights")
 
         # Set up summary Ops
         self.summary_ops, self.summary_vars = self.build_summaries()
 
         self.sess.run(tf.global_variables_initializer())
-        summary_dir = log_dir
+        if self.train_indicator:
+            summary_dir = log_dir + 'training/'
+        else:
+            summary_dir = log_dir + 'test/'
         self.writer = tf.summary.FileWriter(summary_dir, self.sess.graph)
 
     def pad_zeros(self, array, max_timesteps):
@@ -381,9 +394,9 @@ class Agent:
         summary_str = self.sess.run(self.summary_ops, feed_dict={
             self.summary_vars[0]: np.sum(reward),
                     })
-        self.writer.add_summary(summary_str, self.i)
+        self.writer.add_summary(summary_str, self.summary_counter)
         self.writer.flush()
-        self.i += 1
+        self.summary_counter += 1
 
     def save_model(self, model, name):
         #yaml saves the model architecture
@@ -400,32 +413,33 @@ class Agent:
         self.save_model(self.critic.target_model, log_dir+'target_critic_model{0:05d}'.format(episode))
 
     def train(self):
-        batch = self.replay_memory.getBatch(self.batch_size)
-
-        # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
-        # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
-        # calculations
-        sequence_length = [seq[0].shape[0] for seq in batch]
-        max_t = max(sequence_length)
-
-        states = np.asarray([self.pad_zeros(seq[0], max_t) for seq in batch])
-        actions = np.asarray([self.pad_zeros(seq[1], max_t) for seq in batch])
-        rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
-        new_states = np.asarray([self.pad_zeros(seq[3], max_t) for seq in batch])
-        dones = np.asarray([seq[4] for seq in batch])
-        # mask = np.asarray([self.pad_zeros(seq[5], max_t) for seq in batch])
-        y_t = rewards.copy()
-
-        target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict(new_states)])
-
-        #Compute the target values
-        for k in range(len(batch)):
-            if dones[k]:
-                y_t[k] = rewards[k]
-            else:
-                y_t[k] = rewards[k] + self.gamma * target_q_values[k]
-
         if self.train_indicator:
+            batch = self.replay_memory.getBatch(self.batch_size)
+
+            # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
+            # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
+            # calculations
+            sequence_length = [seq[0].shape[0] for seq in batch]
+            max_t = max(sequence_length)
+
+            states = np.asarray([self.pad_zeros(seq[0], max_t) for seq in batch])
+            actions = np.asarray([self.pad_zeros(seq[1], max_t) for seq in batch])
+            rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
+            new_states = np.asarray([self.pad_zeros(seq[3], max_t) for seq in batch])
+            dones = np.asarray([seq[4] for seq in batch])
+            # mask = np.asarray([self.pad_zeros(seq[5], max_t) for seq in batch])
+            y_t = rewards.copy()
+
+            target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict(new_states)])
+
+            #Compute the target values
+            for k in range(len(batch)):
+                if dones[k]:
+                    y_t[k] = rewards[k]
+                else:
+                    y_t[k] = rewards[k] + self.gamma * target_q_values[k]
+
+
             actions_for_grad = self.actor.model.predict(states)
             grads = self.critic.gradients(states, actions_for_grad)
             self.critic.train(states, actions, y_t)
@@ -457,7 +471,6 @@ class Agent:
                 ac.set_dest_flag(1)
         # return list of waypoints
 
-
     def __update_acdict_entries(self):
         """
         Check which aircraft have to be added to dictionary or deleted when aircraft have landed.
@@ -479,8 +492,6 @@ class Agent:
         j = section of main route
         k = segment choice in section
     """
-
-
 
     def get_mask(self):
         """
@@ -507,10 +518,11 @@ class Agent:
         noise = self.OU()
         print('action {}, noise {}'.format(self.action, noise))
 
-        # Add exploration noise and clip to range [-1, 1] for action space
-        self.action = self.action + noise
-        self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
-        self.action = np.minimum(np.ones(self.action.shape), self.action)
+        if self.train_indicator:
+            # Add exploration noise and clip to range [-1, 1] for action space
+            self.action = self.action + noise
+            self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
+            self.action = np.minimum(np.ones(self.action.shape), self.action)
 
 
         # print('actionstate', self.action, state)
@@ -546,9 +558,6 @@ class Agent:
         print('heading action', heading)
         for i in np.arange(traf.ntraf):
             stack.stack('HDG {} {}'.format(traf.id[i], heading[0][i]))
-
-
-
 
     def act_discrete(self, state):
         # Infer action selection
@@ -606,7 +615,6 @@ class Agent:
             # Create speed command
             stack.stack("{} SPD {}".format(ac.id, speed_actions[i]))
 
-
     def update_cumreward(self, reward):
         self.cumreward += reward
 
@@ -614,6 +622,7 @@ class Agent:
         self.write_summaries(self.cumreward)
         self.cumreward=0
         self.ac_dict={}
+
 
 class Aircraft():
     def __init__(self, id):
@@ -642,6 +651,7 @@ class Aircraft():
 
     def increment_j(self):
         self.j += 1
+
 
 def bell_curve(x, mu=0., sigma=1., y_offset=0, scaled=1):
     # Computes Gaussian and scales the peak to 1.
