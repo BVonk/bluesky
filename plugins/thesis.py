@@ -54,9 +54,10 @@ def init_plugin():
     state_size = 5
     action_size = 1
     update_interval = 10
-    training = False
+    training = True
+    scenario = 'BiCNet2.scn'
     agent = Agent(state_size, action_size, training)
-    env = Environment(state_size)
+    env = Environment(state_size, scenario)
     routes = dict()
 
 
@@ -148,9 +149,14 @@ def preupdate():
         if agent.replay_memory.num_experiences > agent.batch_size:
             agent.train()
         # agent.write_summaries(reward)
+        # Now get observation without the deleted aircraft for acting. Otherwise an error occurs because the deleted
+        # aircraft no longer exists in the stack.
+        new_state = env.get_observation()
 
-    agent.act_continuous(new_state)
-    if env.done:
+    action = agent.act_continuous(new_state)
+    env.action_command(action)
+
+    if env.get_done():
         # Reset environment states and agent states
         if env.episode % 50==0:
             agent.save_models(env.episode)
@@ -191,16 +197,18 @@ def norm(data, axis=0):
 
 
 class Environment:
-    def __init__(self, state_size):
+    def __init__(self, state_size, scenario):
         self.n_aircraft = traf.ntraf
         self.state_size = state_size
         self.ac_dict = {}
         self.prev_traf = 0
         self.observation = np.zeros((1,self.state_size))
-        self.done = False
+        self.done = np.array([False])
         self.state_normalizer = Normalizer(self.state_size)
         self.wp_db = self.load_waypoints()
         self.episode = 1
+        self.scn = scenario
+        self.idx = []
 
         for id in traf.id:
             self.ac_dict[id]= [0,0,0]
@@ -215,25 +223,34 @@ class Environment:
         # Check termination conditions
         self.check_reached()
         self.generate_reward()
-        return prev_observation, self.reward, self.observation, self.done
+        done = True if self.done.all() == True else False
+
+        done_idx = np.where(self.done == True)[0]
+        for idx in done_idx:
+            stack.stack("DEL {}".format(traf.id[idx]))
+
+        # There is a mismatch between the aircraft size in the observation returned for the replay memory and the
+        # observation required to select actions when an aircraft is deleted. Therefore two separate observations must
+        # be used.
+        replay_observation = self.observation
+        self.observation = np.delete(self.observation, done_idx, 0)
+        self.idx = np.delete(traf.id, done_idx)
+        return prev_observation, self.reward, replay_observation, done
 
     def generate_reward(self):
-        global_reward = 1
-        local_reward = np.ones((traf.ntraf,1))
-        self.reward = local_reward + global_reward
-        if self.done:
-            self.reward = 60 * np.ones((traf.ntraf,1))
-        else:
-            self.reward = -1 * np.ones((traf.ntraf,1))
-
+        global_reward = -0.5
+        local_reward = self.done * 10
+        self.reward = np.asarray(local_reward + global_reward).reshape((local_reward.shape[0],1))
 
     def generate_observation_continuous(self):
         destidx = navdb.getaptidx('EHAM')
         lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
         qdr, dist = qdrdist_matrix(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
+        qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
         obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist]).transpose()
+        # print(obs)
+        # print('obs shape', traf.ntraf, obs.shape)
         return obs
-
 
     def generate_observation_discrete(self):
         # Produce a running average off all variables in the field with regard to the initial state convergence that is being tackled in the problem.
@@ -262,6 +279,10 @@ class Environment:
         obs = np.hstack((obs, coords))
         return obs
 
+    def action_command(self, action):
+        for i in range(len(self.idx)):
+            stack.stack('HDG {} {}'.format(self.idx[i], action[i]))
+
     def check_reached(self):
         qdr, dist = qdrdist(traf.lat, traf.lon,
                                 traf.actwp.lat, traf.actwp.lon)  # [deg][nm])
@@ -272,12 +293,21 @@ class Environment:
         away = np.abs(degto180(traf.trk % 360. - qdr % 360.)) > 100.
         d = dist<2
         reached = np.where(away * dest * d)[0]
-        print('track', traf.trk, qdr, dist)
-        if reached==[0]:
-            # TODO: Extend for multi-aircraft
-            self.done = True
-        else:
-            self.done = False
+        # print('track', traf.trk, qdr, dist)
+
+        # What is the desired behaviour. When an aircraft has reached, it will be flagged as reached.
+        # Therefore the aircraft should get a corresponding reward as well for training purposes in the replay memory
+        # Next the corresponding aircraft should be deleted.
+        # If no more aircraft are present, next episode should start.
+        # print('reached', reached)
+        done = np.zeros((traf.ntraf), dtype=bool)
+        done[reached] = True
+        self.done = done
+        # if reached==[0]:
+        #     # TODO: Extend for multi-aircraft
+        #     self.done = True
+        # else:
+        #     self.done = False
 
     def generate_commands(self):
         pass
@@ -304,11 +334,19 @@ class Environment:
         return wp_db
 
     def reset(self):
-        self.done = False
+        self.done = np.array([False])
         self.episode += 1
-        stack.stack('open ./scenario/bart/BiCNet.SCN')
+        stack.stack('open ./scenario/bart/{}'.format(self.scn))
         load_routes()
 
+    def get_done(self):
+        if self.done.all() == True:
+            return True
+        else:
+            return False
+
+    def get_observation(self):
+        return self.observation
 
 
 class Agent:
@@ -377,6 +415,7 @@ class Agent:
             return array
         else:
             result = np.zeros((max_timesteps, array.shape[-1], self.action_size))
+            result = np.zeros((max_timesteps, array.shape[-1]))
             result[:array.shape[0], :] = array
             return result
 
@@ -427,17 +466,19 @@ class Agent:
             rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
             new_states = np.asarray([self.pad_zeros(seq[3], max_t) for seq in batch])
             dones = np.asarray([seq[4] for seq in batch])
+            # print(rewards)
+            # print(new_states)
             # mask = np.asarray([self.pad_zeros(seq[5], max_t) for seq in batch])
             y_t = rewards.copy()
 
             target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict(new_states)])
-
+            y_t = target_q_values.copy()
             #Compute the target values
             for k in range(len(batch)):
                 if dones[k]:
-                    y_t[k] = rewards[k]
+                    y_t[k] = rewards[k].reshape((max_t, 1))
                 else:
-                    y_t[k] = rewards[k] + self.gamma * target_q_values[k]
+                    y_t[k] = rewards[k].reshape((max_t, 1)) + self.gamma * target_q_values[k]
 
 
             actions_for_grad = self.actor.model.predict(states)
@@ -513,10 +554,12 @@ class Agent:
         return actionmask.reshape(1, traf.ntraf, self.action_size)
 
     def act_continuous(self, state):
-        # self.__update_acdict_entries()
-        self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size))])
+        n_aircraft = int(np.prod(state.shape)/self.state_size)
+        if n_aircraft==0:
+            return
+        self.action = self.actor.predict([np.reshape(state, (1, n_aircraft, self.state_size))])
         noise = self.OU()
-        print('action {}, noise {}'.format(self.action, noise))
+        # print('action {}, noise {}'.format(self.action, noise))
 
         if self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
@@ -540,24 +583,28 @@ class Agent:
         dist = dist.reshape(action.shape)
         mul_factor = 90*np.ones(dist.shape)
 
-        print(mul_factor.shape, dist.shape)
+        # print(mul_factor.shape, dist.shape)
         wheredist = np.where(dist<dist_limit)[0]
         mul_factor[wheredist] = dist[wheredist] / dist_limit * 90
         minus = np.where(self.action<0)[0]
         plus = np.where(self.action>=0)[0]
         dheading = np.zeros(action.shape)
-        print(dheading.shape, minus.shape, mul_factor.shape, action.shape)
+        # print(dheading.shape, minus.shape, mul_factor.shape, action.shape)
         dheading[minus] = (action[minus] - 1) * mul_factor[minus]
         dheading[plus] = np.abs(action[plus]-1) * mul_factor[plus]
-        print('selfaction', self.action)
-        print('dheading', dheading)
+        # print('selfaction', self.action)
+        # print('dheading', dheading)
         action[minus] = -1*action[minus]
         qdr = state[:,3].transpose()
-        print('qdr', qdr)
+        # print('qdr', qdr)
         heading =  qdr + dheading
-        print('heading action', heading)
-        for i in np.arange(traf.ntraf):
-            stack.stack('HDG {} {}'.format(traf.id[i], heading[0][i]))
+        # print('heading action', heading)
+
+        ### FIX HEREEEEEE
+        # for i in np.arange(n_aircraft):
+        #     stack.stack('HDG {} {}'.format(traf.id[i], heading[0][i]))
+
+        return heading[0]
 
     def act_discrete(self, state):
         # Infer action selection
@@ -582,7 +629,7 @@ class Agent:
 
         wp_ind = action % self.wp_action_size
         spd_ind = np.floor(action / self.wp_action_size).astype(int)
-        print('spd_ind', spd_ind)
+        # print('spd_ind', spd_ind)
         speed_actions = [self.speed_values[i[0]] for i in spd_ind]
 
         # Produce action command
