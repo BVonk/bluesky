@@ -7,17 +7,19 @@ Created on Thu Jun  7 10:35:02 2018
 
 """ Plugin to resolve conflicts """
 # Import the global bluesky objects. Uncomment the ones you need
-from bluesky import stack, sim  #, settings, navdb, traf, sim, scr, tools
+from bluesky import stack, sim, traf, navdb  #, settings, navdb, traf, sim, scr, tools
 from bluesky.tools.geo import kwikdist, qdrpos, qdrdist, qdrdist_matrix
 from bluesky.tools.misc import degto180
-from bluesky import traf
-from bluesky import navdb
 from bluesky.tools.aero import nm, g0
+
 from plugins.ml.actor import ActorNetwork
 from plugins.ml.critic import CriticNetwork
 from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
 from plugins.ml.OU import OrnsteinUhlenbeckActionNoise
+from plugins.help_functions import detect_los
+import bluesky as bs
+
 
 
 
@@ -43,7 +45,7 @@ def init_plugin():
     global env, agent, update_interval, routes, log_dir
 
     # Create logging folder
-    log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S'))
+    log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
         os.makedirs(log_dir+'training/')
@@ -136,7 +138,6 @@ def init():
 
 
 def preupdate():
-    # Initialize routes
     if sim.simt < update_interval*1.5:
         new_state = env.init()
 
@@ -209,6 +210,7 @@ class Environment:
         self.episode = 1
         self.scn = scenario
         self.idx = []
+        self.los_pairs = []
 
         for id in traf.id:
             self.ac_dict[id]= [0,0,0]
@@ -221,6 +223,7 @@ class Environment:
         prev_observation = self.observation
         self.observation = self.generate_observation_continuous()
         # Check termination conditions
+        self.los_pairs = detect_los(traf, traf, traf.asas.R, traf.asas.dh)
         self.check_reached()
         self.generate_reward()
         done = True if self.done.all() == True else False
@@ -238,18 +241,27 @@ class Environment:
         return prev_observation, self.reward, replay_observation, done
 
     def generate_reward(self):
+        """ Generate reward scalar for each aircraft"""
         global_reward = -0.5
-        local_reward = self.done * 10
-        self.reward = np.asarray(local_reward + global_reward).reshape((local_reward.shape[0],1))
+        reached_reward = self.done * 10
+        los_reward = np.zeros(reached_reward.shape)
+        print(self.los_pairs)
+        if len(self.los_pairs) > 0:
+            ac_list = [ac[0] for ac in self.los_pairs]
+            traf_list = list(traf.id)
+            idx = [traf_list.index(x) for x in ac_list]
+            for i in idx:
+                los_reward[i] = los_reward[i] - 50
+        print(los_reward)
+        self.reward = np.asarray(reached_reward + global_reward + los_reward).reshape((reached_reward.shape[0],1))
 
     def generate_observation_continuous(self):
+        """ Generate observation of size N_aircraft x state_size"""
         destidx = navdb.getaptidx('EHAM')
         lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
         qdr, dist = qdrdist_matrix(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
         qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
         obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist]).transpose()
-        # print(obs)
-        # print('obs shape', traf.ntraf, obs.shape)
         return obs
 
     def generate_observation_discrete(self):
