@@ -12,8 +12,8 @@ from bluesky.tools.geo import kwikdist, qdrpos, qdrdist, qdrdist_matrix
 from bluesky.tools.misc import degto180
 from bluesky.tools.aero import nm, g0
 
-from plugins.ml.actor import ActorNetwork
-from plugins.ml.critic import CriticNetwork
+from plugins.ml.actor import ActorNetwork, ActorNetwork_shared_obs
+from plugins.ml.critic import CriticNetwork, CriticNetwork_shared_obs
 from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
 from plugins.ml.OU import OrnsteinUhlenbeckActionNoise
@@ -51,17 +51,24 @@ def init_plugin():
         os.makedirs(log_dir+'training/')
         os.makedirs(log_dir+'test/')
 
-
     # config
     state_size = 5
     action_size = 1
     update_interval = 10
     training = True
-    scenario = 'BiCNet2.scn'
+    scenario = 'out.scn'
     agent = Agent(state_size, action_size, training)
     env = Environment(state_size, scenario)
     routes = dict()
 
+    # TODO: Read config from config file so no commits have to be made with configurtation changes like scenario calling.
+    # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
+    # TODO: Every x iterations a test episode must be run to see how far the exploration has come so far
+    # TODO: Change reset function to suit the scenario. Right now only the amount of aircraft in the simulation give rise to this change
+    # TODO: Find bug in reward generation
+    # TODO: Check that cumulative reward updte
+    # TODO: Find system performance indicator
+    # CONFIG = read_config()
 
     config = {
         # The name of your plugin
@@ -201,12 +208,13 @@ class Environment:
     def __init__(self, state_size, scenario):
         self.n_aircraft = traf.ntraf
         self.state_size = state_size
+        self.shared_state_size = 6
         self.ac_dict = {}
         self.prev_traf = 0
         self.observation = np.zeros((1,self.state_size))
         self.done = np.array([False])
         self.state_normalizer = Normalizer(self.state_size)
-        self.wp_db = self.load_waypoints()
+        # self.wp_db = self.load_waypoints()
         self.episode = 1
         self.scn = scenario
         self.idx = []
@@ -215,13 +223,16 @@ class Environment:
         for id in traf.id:
             self.ac_dict[id]= [0,0,0]
 
+
     def init(self):
-        self.observation = self.generate_observation_continuous()
+        self.observation = [self.generate_observation_continuous(), self.generate_shared_observation()]
+
         return self.observation
+
 
     def step(self):
         prev_observation = self.observation
-        self.observation = self.generate_observation_continuous()
+        self.observation = [self.generate_observation_continuous(), self.generate_shared_observation()]
         # Check termination conditions
         self.los_pairs = detect_los(traf, traf, traf.asas.R, traf.asas.dh)
         self.check_reached()
@@ -236,24 +247,47 @@ class Environment:
         # observation required to select actions when an aircraft is deleted. Therefore two separate observations must
         # be used.
         replay_observation = self.observation
-        self.observation = np.delete(self.observation, done_idx, 0)
+
+        if type(self.observation)==list:
+            self.observation[0] = np.delete(self.observation[0], done_idx, 0)
+            print(self.observation[0].shape)
+            if self.observation[0].shape[0]==0:
+                self.observation[1] = np.delete(self.observation[1], np.arange(self.observation[1].shape[0]), 0)
+            else:
+                mask = np.ones(self.observation[1].shape, dtype=np.bool)
+                print('mask', done_idx, mask.shape)
+                for idx in done_idx:
+                    mask[idx, :, :] = 0
+                    if idx == 0 and mask.shape[1]==0:
+                        mask[:,:,:] = 0
+                    elif idx == 0:
+                        mask[idx:, idx, :] = 0
+                    elif idx == mask.shape[1]:
+                        mask[:idx, idx - 1, :] = 0
+                    else:
+                        mask[:idx, idx - 1, :] = 0
+                        mask[idx:, idx, :] = 0
+
+                self.observation[1] = self.observation[1][mask].reshape((traf.ntraf - len(done_idx), traf.ntraf - len(done_idx) - 1, self.shared_state_size))
+        else:
+            self.observation = np.delete(self.observation, done_idx, 0)
         self.idx = np.delete(traf.id, done_idx)
         return prev_observation, self.reward, replay_observation, done
+
 
     def generate_reward(self):
         """ Generate reward scalar for each aircraft"""
         global_reward = -0.5
         reached_reward = self.done * 10
         los_reward = np.zeros(reached_reward.shape)
-        print(self.los_pairs)
         if len(self.los_pairs) > 0:
             ac_list = [ac[0] for ac in self.los_pairs]
             traf_list = list(traf.id)
             idx = [traf_list.index(x) for x in ac_list]
             for i in idx:
                 los_reward[i] = los_reward[i] - 50
-        print(los_reward)
         self.reward = np.asarray(reached_reward + global_reward + los_reward).reshape((reached_reward.shape[0],1))
+
 
     def generate_observation_continuous(self):
         """ Generate observation of size N_aircraft x state_size"""
@@ -262,7 +296,31 @@ class Environment:
         qdr, dist = qdrdist_matrix(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
         qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
         obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist]).transpose()
+
         return obs
+
+    def generate_shared_observation(self):
+        """
+        Generate the shared observation sequences for the aircraft
+        States are distance, heading, bearing, latitude longitude, (speed)
+
+        The observation are Ntraf sequences of size (Ntraf - 1 , x)
+        """
+
+        # Generate distance matrix
+        dist, qdr = qdrdist_matrix(np.mat(traf.lat), np.mat(traf.lon), np.mat(traf.lat), np.mat(traf.lon))
+        dist, qdr = np.array(dist), np.array(qdr)
+        shared_obs = np.zeros((traf.ntraf, traf.ntraf - 1, self.shared_state_size))
+        for i in range(traf.ntraf):
+            # shared_obs = np.zeros((traf.ntraf - 1, self.shared_state_size))
+            shared_obs[i, :, 0] = np.delete(dist[i,:], i, 0)
+            shared_obs[i, :, 1] = np.delete(qdr[i,:]/180., i, 0)  # divide by 180
+            shared_obs[i, :, 2] = np.delete(traf.lat, i)
+            shared_obs[i, :, 3] = np.delete(traf.lon, i)
+            shared_obs[i, :, 4] = np.delete(traf.hdg/180., i)     # divide by 180
+            shared_obs[i, :, 5] = np.delete(traf.cas, i)
+        return shared_obs
+
 
     def generate_observation_discrete(self):
         # Produce a running average off all variables in the field with regard to the initial state convergence that is being tackled in the problem.
@@ -315,11 +373,7 @@ class Environment:
         done = np.zeros((traf.ntraf), dtype=bool)
         done[reached] = True
         self.done = done
-        # if reached==[0]:
-        #     # TODO: Extend for multi-aircraft
-        #     self.done = True
-        # else:
-        #     self.done = False
+
 
     def generate_commands(self):
         pass
@@ -367,6 +421,7 @@ class Agent:
         self.train_indicator = training
         self.action_size = action_size
         self.state_size = state_size
+        self.shared_obs_size = 6
         self.batch_size = 32
         self.tau = 0.9
         self.gamma = 0.99
@@ -377,17 +432,18 @@ class Agent:
         self.max_agents = None
         self.OU = OrnsteinUhlenbeckActionNoise(np.array([0]), sigma=0.15, theta=.5, dt=0.1)
         self.memory_size = 10000
+        self.max_agents = 10
 
-        self.load_dir = 'output/20181018_150403-2.1/'
-        self.load_ep  = '07500'
+        # TODO: Move these to config file
+        self.load_dir = 'output/20181024_122347/'
+        self.load_ep  = '02500'
 
         self.ac_dict = {}
         self.speed_values = [175, 200, 225, 250]
         self.wp_action_size = 3
         self.spd_action_size = len(self.speed_values)
 
-        #TODO: Set the correct action size to correspond with the desired action output and neural network architecture
-         #self.wp_action_size * self.spd_action_size
+        #self.wp_action_size * self.spd_action_size
 
         self.action = []
         self.summary_counter = 0
@@ -397,8 +453,10 @@ class Agent:
         self.sess = tf.Session(config=config)
         K.set_session(self.sess)
 
-        self.actor = ActorNetwork(self.sess, self.state_size, self.action_size, self.batch_size, self.tau, self.actor_learning_rate)
-        self.critic = CriticNetwork(self.sess, self.state_size, self.action_size, self.batch_size, self.tau, self.critic_learning_rate)
+        self.actor = ActorNetwork_shared_obs(self.sess, self.state_size, self.shared_obs_size, self.action_size,
+                                             self.max_agents, self.batch_size, self.tau, self.actor_learning_rate)
+        self.critic = CriticNetwork_shared_obs(self.sess, self.state_size, self.shared_obs_size, self.action_size,
+                                               self.max_agents, self.batch_size, self.tau, self.critic_learning_rate)
         self.replay_memory = ReplayMemory(self.memory_size)
 
         #Now load the weight
@@ -423,13 +481,24 @@ class Agent:
         self.writer = tf.summary.FileWriter(summary_dir, self.sess.graph)
 
     def pad_zeros(self, array, max_timesteps):
-        if array.shape[0] == max_timesteps:
-            return array
-        else:
-            result = np.zeros((max_timesteps, array.shape[-1], self.action_size))
-            result = np.zeros((max_timesteps, array.shape[-1]))
-            result[:array.shape[0], :] = array
-            return result
+        """Pad 0's for local observation sequences"""
+        # if array.shape[0] == max_timesteps:
+        #     return array
+        # else:
+        # result = np.zeros((max_timesteps, array.shape[-1], self.action_size))
+        result = np.zeros((max_timesteps, array.shape[-1]))
+        if len(array.shape)==3:
+            array = array.reshape((array.shape[1], array.shape[2]))
+        result[0:array.shape[0], :] = array
+        return result
+
+    def pad_nines(self, array, max_timesteps):
+        """Pad -999 for shared observations sequences"""
+        zeros = -999.0 * np.ones((max_timesteps, max_timesteps - 1, array.shape[-1]))
+        if len(array.shape)==4:
+            array=array.reshape((array.shape[1:]))
+        zeros[0:array.shape[0], 0:array.shape[1], :] = array
+        return zeros
 
     def build_summaries(self):
         episode_reward = tf.Variable(0.)
@@ -465,25 +534,33 @@ class Agent:
 
     def train(self):
         if self.train_indicator:
+            # TODO: Check that the gradient calculator ignores the zero input sequences.
             batch = self.replay_memory.getBatch(self.batch_size)
 
             # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
             # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
             # calculations
-            sequence_length = [seq[0].shape[0] for seq in batch]
-            max_t = max(sequence_length)
+            # sequence_length = [seq[0].shape[0] for seq in batch]
+            # max_t = max(sequence_length)
+            max_t = self.max_agents
+            if type(batch[0][0])==list:
+                # states = [[self.pad_zeros(seq[0][0], max_t), self.pad_nines(seq[0][1], max_t)] for seq in batch]
+                states = [ np.asarray([self.pad_zeros(seq[0][0], max_t) for seq in batch]) ]
+                states.append(np.asarray([self.pad_nines(seq[0][1], max_t) for seq in batch ]))
+                # new_states = [[self.pad_zeros(seq[3][0], max_t), self.pad_nines(seq[3][1], max_t)] for seq in batch]
+                new_states = [ np.asarray([self.pad_zeros(seq[3][0], max_t) for seq in batch]) ]
+                new_states.append(np.asarray([self.pad_nines(seq[3][1], max_t) for seq in batch ]))
 
-            states = np.asarray([self.pad_zeros(seq[0], max_t) for seq in batch])
+            else:
+                states = np.asarray([[self.pad_zeros(seq[0], max_t)] for seq in batch])
+                new_states = np.asarray([[self.pad_zeros(seq[3], max_t)] for seq in batch])
+
             actions = np.asarray([self.pad_zeros(seq[1], max_t) for seq in batch])
             rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
-            new_states = np.asarray([self.pad_zeros(seq[3], max_t) for seq in batch])
             dones = np.asarray([seq[4] for seq in batch])
-            # print(rewards)
-            # print(new_states)
-            # mask = np.asarray([self.pad_zeros(seq[5], max_t) for seq in batch])
-            y_t = rewards.copy()
 
-            target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict(new_states)])
+            # target_q_values = self.critic.target_model.predict(new_states, self.actor.target_model.predict(new_states))
+            target_q_values = self.critic.target_model.predict([new_states[0], new_states[1], self.actor.target_model.predict(new_states)])
             y_t = target_q_values.copy()
             #Compute the target values
             for k in range(len(batch)):
@@ -501,11 +578,11 @@ class Agent:
             self.critic.update_target_network()
 
 
-
     def update_replay_memory(self, state, reward, done, new_state):
-        max_t = state.shape[0]
+        # max_t = state[0].shape[0]
         # print('update_replay', state.shape, reward.shape, self.action.reshape(max_t, self.action_size).shape, self.mask.reshape(max_t, self.action_size).shape)
-        self.replay_memory.add(state, self.action.reshape(max_t, self.action_size), reward, new_state, done)
+        self.replay_memory.add(state, self.action.reshape(self.max_agents, self.action_size), reward, new_state, done)
+
 
     def __update_aircraft_waypoints(self):
         """
@@ -523,6 +600,7 @@ class Agent:
             elif traf.ap.route[i].wptype[actwp] == 3 and actwp >= ac.route_length:
                 ac.set_dest_flag(1)
         # return list of waypoints
+
 
     def __update_acdict_entries(self):
         """
@@ -546,6 +624,7 @@ class Agent:
         k = segment choice in section
     """
 
+
     def get_mask(self):
         """
         Creates a mask for valid actions an aircraft can select. Masks the aircraft in the dictionary set that require a new waypoint to be selected with 1.
@@ -565,20 +644,23 @@ class Agent:
 
         return actionmask.reshape(1, traf.ntraf, self.action_size)
 
+
     def act_continuous(self, state):
-        n_aircraft = int(np.prod(state.shape)/self.state_size)
+        n_aircraft = int(np.prod(state[0].shape)/self.state_size)
         if n_aircraft==0:
             return
-        self.action = self.actor.predict([np.reshape(state, (1, n_aircraft, self.state_size))])
+
+        state[0] = self.pad_zeros(state[0], self.max_agents).reshape((1, self.max_agents, self.state_size))
+        state[1] = self.pad_nines(state[1], self.max_agents).reshape((1, self.max_agents, self.max_agents-1, self.shared_obs_size))
+        self.action = self.actor.predict(state)
+
         noise = self.OU()
-        # print('action {}, noise {}'.format(self.action, noise))
 
         if self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
             self.action = self.action + noise
             self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
             self.action = np.minimum(np.ones(self.action.shape), self.action)
-
 
         # print('actionstate', self.action, state)
         # Apply Bell curve here to sample from to get action values
@@ -587,11 +669,9 @@ class Agent:
         y_offset = 0.107982 + 6.69737e-08
         action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
 
-        # Due to exploration noise action could drop below 0
-        action[np.where(action<0)[0]]=0
 
         dist_limit = 5 #nm
-        dist = state[:, 4].transpose()
+        dist = state[0][:,:, 4] #.transpose()
         dist = dist.reshape(action.shape)
         mul_factor = 90*np.ones(dist.shape)
 
@@ -607,16 +687,12 @@ class Agent:
         # print('selfaction', self.action)
         # print('dheading', dheading)
         action[minus] = -1*action[minus]
-        qdr = state[:,3].transpose()
+        qdr = state[0][:,:,3].transpose()
         # print('qdr', qdr)
         heading =  qdr + dheading
-        # print('heading action', heading)
 
-        ### FIX HEREEEEEE
-        # for i in np.arange(n_aircraft):
-        #     stack.stack('HDG {} {}'.format(traf.id[i], heading[0][i]))
+        return heading.ravel()[0:n_aircraft]
 
-        return heading[0]
 
     def act_discrete(self, state):
         # Infer action selection
@@ -646,7 +722,7 @@ class Agent:
 
         # Produce action command
         # Get the number of segments in main route index and construct
-        maxsegments = 4 #TODO: Dummy to replace
+        maxsegments = 4
 
         # Action is already selected. Just generate the commands ;)
 
@@ -675,7 +751,8 @@ class Agent:
             stack.stack("{} SPD {}".format(ac.id, speed_actions[i]))
 
     def update_cumreward(self, reward):
-        self.cumreward += reward
+        pass
+        # self.cumreward += reward
 
     def reset(self):
         self.write_summaries(self.cumreward)

@@ -14,9 +14,9 @@ class ActorNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(None, state_size, action_size, 16, 16, 'actor')
+        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(None, state_size, action_size, 32, 32, 'actor')
         print(self.model.summary())
-        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(None, state_size, action_size, 16, 16, 'actor_target')
+        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(None, state_size, action_size, 32, 32, 'actor_target')
         self.action_gradient = tf.placeholder(tf.float32,[None, None, action_size])
         # Negative action gradients are used for gradient ascent.
         self.unnormalized_actor_gradients = tf.gradients(self.model.output, self.weights, -self.action_gradient)
@@ -56,6 +56,50 @@ class ActorNetwork(object):
 
     def predict(self, inputs):
         return self.model.predict(inputs)
+
+
+class ActorNetwork_shared_obs(object):
+    def __init__(self, sess, state_size, shared_state_size, action_size, MAX_AIRCRAFT, BATCH_SIZE, TAU, LEARNING_RATE):
+        self.sess = sess
+        self.BATCH_SIZE = BATCH_SIZE
+        self.TAU = TAU
+        self.LEARNING_RATE = LEARNING_RATE
+
+        K.set_session(sess)
+
+        #Now create the model
+        self.model, self.weights, self.actions,  self.state, self.shared_state = BiCNet.build_actor_shared_obs(MAX_AIRCRAFT, state_size, shared_state_size, action_size, 16, 16, 'actor')
+        print(self.model.summary())
+        self.target_model, self.target_weights, self.target_actions, self.target_state, self.target_shared_state = BiCNet.build_actor_shared_obs(MAX_AIRCRAFT, state_size, shared_state_size, action_size, 16, 16, 'actor_target')
+        self.action_gradient = tf.placeholder(tf.float32,[None, None, action_size])
+        # Negative action gradients are used for gradient ascent.
+        self.unnormalized_actor_gradients = tf.gradients(self.model.output, self.weights, -self.action_gradient)
+
+        self.actor_gradients = list(map(lambda x: tf.div(x, self.BATCH_SIZE), self.unnormalized_actor_gradients))
+
+        grads = zip(self.actor_gradients, self.weights)
+        self.optimize = tf.train.AdamOptimizer(LEARNING_RATE).apply_gradients(grads)
+        self.sess.run(tf.global_variables_initializer())
+
+        # print(self.state.shape)
+
+    def train(self, states, action_grads):
+        self.sess.run(self.optimize, feed_dict={
+            self.state: states[0],
+            self.shared_state: states[1],
+            self.action_gradient: action_grads
+        })
+
+    def update_target_network(self):
+        actor_weights = self.model.get_weights()
+        actor_target_weights = self.target_model.get_weights()
+        for i in np.arange(len(actor_weights)):
+            actor_target_weights[i] = self.TAU * actor_weights[i] + (1 - self.TAU)* actor_target_weights[i]
+        self.target_model.set_weights(actor_target_weights)
+
+    def predict(self, inputs):
+        return self.model.predict(inputs)
+
 
 if __name__ == '__main__':
     sess = tf.Session()
