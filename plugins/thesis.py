@@ -64,10 +64,13 @@ def init_plugin():
     # TODO: Read config from config file so no commits have to be made with configurtation changes like scenario calling.
     # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
     # TODO: Every x iterations a test episode must be run to see how far the exploration has come so far
-    # TODO: Change reset function to suit the scenario. Right now only the amount of aircraft in the simulation give rise to this change
     # TODO: Find bug in reward generation
-    # TODO: Check that cumulative reward updte
+    # TODO: Check that cumulative reward update
     # TODO: Find system performance indicator
+    # TODO: Implement minimum wake separation
+    # TODO: Set destination for every aircraft (FAF)
+    # TODO: Use BlueSKy logging / plotting
+    # TODO: Fix circling target problem
     # CONFIG = read_config()
 
     config = {
@@ -145,15 +148,17 @@ def init():
 
 
 def preupdate():
+    # print('stack {} '.format(len(stack.get_scendata()[0])))
     if sim.simt < update_interval*1.5:
         new_state = env.init()
 
 
-    else:
+    elif traf.ntraf!=0:
         # Construct new state
         state, reward, new_state, done = env.step()
         agent.update_cumreward(reward)
         agent.update_replay_memory(state, reward, done, new_state)
+
         if agent.replay_memory.num_experiences > agent.batch_size:
             agent.train()
         # agent.write_summaries(reward)
@@ -161,10 +166,12 @@ def preupdate():
         # aircraft no longer exists in the stack.
         new_state = env.get_observation()
 
-    action = agent.act_continuous(new_state)
-    env.action_command(action)
+    if traf.ntraf!=0:
+        action = agent.act_continuous(new_state)
+        env.action_command(action)
 
-    if env.get_done():
+    # Check if all aircraft in simulation landed and there are no more scenario commands left
+    if env.get_done() and len(stack.get_scendata()[0])==0:
         # Reset environment states and agent states
         if env.episode % 50==0:
             agent.save_models(env.episode)
@@ -172,7 +179,6 @@ def preupdate():
         agent.reset()
 
 
-    pass
 
 
 def reset():
