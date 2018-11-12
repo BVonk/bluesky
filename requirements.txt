@@ -6,3 +6,6 @@ pyopengl-accelerate
 msgpack
 zmq
 pygame
+h5py
+tensorflow
+keras
