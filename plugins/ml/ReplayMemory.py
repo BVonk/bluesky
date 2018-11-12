@@ -1,4 +1,5 @@
 from collections import deque
+import numpy as np
 import random
 
 class ReplayMemory():
@@ -18,8 +19,8 @@ class ReplayMemory():
     def size(self):
         return self.memory_size
 
-    def add(self, state, action, reward, new_state, done):
-        experience = (state, action, reward, new_state, done)
+    def add(self, state, action, reward, new_state, done, mask=None):
+        experience = (state, action, reward, new_state, done, mask)
         if self.num_experiences < self.memory_size:
             self.memory.append(experience)
             self.num_experiences += 1

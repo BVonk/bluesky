@@ -7,16 +7,20 @@ Created on Thu Jun  7 10:35:02 2018
 
 """ Plugin to resolve conflicts """
 # Import the global bluesky objects. Uncomment the ones you need
-from bluesky import stack, sim  #, settings, navdb, traf, sim, scr, tools
-from bluesky.tools.geo import kwikdist, qdrpos, qdrdist
+from bluesky import stack, sim, traf, navdb  #, settings, navdb, traf, sim, scr, tools
+from bluesky.tools.geo import kwikdist, qdrpos, qdrdist, qdrdist_matrix
 from bluesky.tools.misc import degto180
-from bluesky import traf
-from bluesky import navdb
 from bluesky.tools.aero import nm, g0
-from plugins.ml.actor import ActorNetwork
-from plugins.ml.critic import CriticNetwork
+
+from plugins.ml.actor import ActorNetwork, ActorNetwork_shared_obs
+from plugins.ml.critic import CriticNetwork, CriticNetwork_shared_obs
 from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
+from plugins.ml.OU import OrnsteinUhlenbeckActionNoise
+from plugins.help_functions import detect_los
+import bluesky as bs
+
+
 
 
 from plugins.vierd import ETA
@@ -24,6 +28,7 @@ from plugins.vierd import ETA
 import pickle
 import random
 import numpy as np
+import time
 import os
 from collections import deque
 from keras.models import Sequential, Model, model_from_yaml
@@ -37,9 +42,37 @@ import tensorflow as tf
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
-    global env, agent
-    env = Environment()
-    agent = Agent()
+    global env, agent, update_interval, routes, log_dir
+
+    # Create logging folder
+    log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        os.makedirs(log_dir+'training/')
+        os.makedirs(log_dir+'test/')
+
+    # config
+    state_size = 5
+    action_size = 1
+    update_interval = 10
+    training = True
+    scenario = 'out.scn'
+    agent = Agent(state_size, action_size, training)
+    env = Environment(state_size, scenario)
+    routes = dict()
+
+    # TODO: Read config from config file so no commits have to be made with configurtation changes like scenario calling.
+    # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
+    # TODO: Every x iterations a test episode must be run to see how far the exploration has come so far
+    # TODO: Find bug in reward generation
+    # TODO: Check that cumulative reward update
+    # TODO: Find system performance indicator
+    # TODO: Implement minimum wake separation
+    # TODO: Set destination for every aircraft (FAF)
+    # TODO: Use BlueSKy logging / plotting
+    # TODO: Fix circling target problem
+    # CONFIG = read_config()
+
     config = {
         # The name of your plugin
         'plugin_name':     'THESIS',
@@ -50,7 +83,7 @@ def init_plugin():
         # Update interval in seconds. By default, your plugin's update function(s)
         # are called every timestep of the simulation. If your plugin needs less
         # frequent updates provide an update interval.
-        'update_interval': 1,
+        'update_interval': update_interval,
 
         # The update function is called after traffic is updated. Use this if you
         # want to do things as a result of what happens in traffic. If you need to
@@ -94,15 +127,7 @@ def init_plugin():
 #            'Reset the training environment']
             }
 
-    stack.stack("CRE BART001, B737, 51.862982, 2.830079, 90, fl200, 150")
-    stack.stack("BART001 DEST EHAM RWY06")
-    stack.stack("BART001 VNAV ON")
-    stack.stack("CRE BART002, B737, 51.2, 2.83, 90, FL200, 150")
-    stack.stack("BART002 DEST EHAM RWY06")
-    stack.stack("BART002 VNAV ON")
-    stack.stack("CRE BART003, B737, 50.9, 2.83, 90, FL200, 150")
-    stack.stack("BART003 DEST EHAM RWY06")
-    stack.stack("BART003 VNAV ON")
+    env.reset()
 
     # init_plugin() should always return these two dicts.
     return config, stackfunctions
@@ -114,45 +139,52 @@ def update():
     # if agent.replay_memory.num_experiences > agent.batch_size:
     #     print('replay {}'.format(agent.replay_memory.num_experiences))
     #     agent.train()
+
     pass
 
-
-
 def init():
-    load_routes()
-    stack.stack("BART001 DEST EHAM RWY06")
+    # load_routes()
+    pass
 
 
 def preupdate():
-    # Initialize routes
-    if sim.simt < 1.5:
-        init()
+    # print('stack {} '.format(len(stack.get_scendata()[0])))
+    if sim.simt < update_interval*1.5:
         new_state = env.init()
-        stack.stack("CRE BART004, B737, 51.862982, 2.830079, 90, fl200, 150")
-        stack.stack("BART004 DEST EHAM RWY06")
-        stack.stack("BART004 VNAV ON")
 
-    else:
+
+    elif traf.ntraf!=0:
         # Construct new state
         state, reward, new_state, done = env.step()
-        # print(agent.replay_memory.count(), state)
+        agent.update_cumreward(reward)
         agent.update_replay_memory(state, reward, done, new_state)
+
         if agent.replay_memory.num_experiences > agent.batch_size:
             agent.train()
-        agent.write_summaries(reward)
+        # agent.write_summaries(reward)
+        # Now get observation without the deleted aircraft for acting. Otherwise an error occurs because the deleted
+        # aircraft no longer exists in the stack.
+        new_state = env.get_observation()
 
-    agent.act(new_state)
+    if traf.ntraf!=0:
+        action = agent.act_continuous(new_state)
+        env.action_command(action)
+
+    # Check if all aircraft in simulation landed and there are no more scenario commands left
+    if env.get_done() and len(stack.get_scendata()[0])==0:
+        # Reset environment states and agent states
+        if env.episode % 50==0:
+            agent.save_models(env.episode)
+        env.reset()
+        agent.reset()
 
 
-    pass
 
 
 def reset():
-
     pass
 
 
-# wptype 3 == Destination --> So check for that:
 def load_routes():
     wpts = np.loadtxt('plugins/ml/routes/testroute.txt')
     i=0
@@ -170,117 +202,309 @@ def get_routes():
         for k in range(int(wpts.shape[1]/2)):
            a.append('RL{}{}{}'.format(i, j, k))
         routes[j] = a
-    # print(routes)
 
 
+def norm(data, axis=0):
+    ma = np.max(data, axis=axis)
+    mi = np.min(data, axis=axis)
+    return (data-mi)/(ma-mi)
 
 
 class Environment:
-    def __init__(self):
+    def __init__(self, state_size, scenario):
         self.n_aircraft = traf.ntraf
-        self.state_size = 5
+        self.state_size = state_size
+        self.shared_state_size = 6
         self.ac_dict = {}
         self.prev_traf = 0
         self.observation = np.zeros((1,self.state_size))
-        self.done = False
+        self.done = np.array([False])
         self.state_normalizer = Normalizer(self.state_size)
+        # self.wp_db = self.load_waypoints()
+        self.episode = 1
+        self.scn = scenario
+        self.idx = []
+        self.los_pairs = []
+
         for id in traf.id:
             self.ac_dict[id]= [0,0,0]
 
+
     def init(self):
-        self.generate_observation()
+        self.observation = [self.generate_observation_continuous(), self.generate_shared_observation()]
+
         return self.observation
+
 
     def step(self):
         prev_observation = self.observation
-        self.observation = self.generate_observation()
+        self.observation = [self.generate_observation_continuous(), self.generate_shared_observation()]
         # Check termination conditions
-        self.check_termination()
+        self.los_pairs = detect_los(traf, traf, traf.asas.R, traf.asas.dh)
+        self.check_reached()
         self.generate_reward()
-        return prev_observation, self.reward, self.observation, self.done
+        done = True if self.done.all() == True else False
+
+        done_idx = np.where(self.done == True)[0]
+        for idx in done_idx:
+            stack.stack("DEL {}".format(traf.id[idx]))
+
+        # There is a mismatch between the aircraft size in the observation returned for the replay memory and the
+        # observation required to select actions when an aircraft is deleted. Therefore two separate observations must
+        # be used.
+        replay_observation = self.observation
+
+        if type(self.observation)==list:
+            self.observation[0] = np.delete(self.observation[0], done_idx, 0)
+            print(self.observation[0].shape)
+            if self.observation[0].shape[0]==0:
+                self.observation[1] = np.delete(self.observation[1], np.arange(self.observation[1].shape[0]), 0)
+            else:
+                mask = np.ones(self.observation[1].shape, dtype=np.bool)
+                print('mask', done_idx, mask.shape)
+                for idx in done_idx:
+                    mask[idx, :, :] = 0
+                    if idx == 0 and mask.shape[1]==0:
+                        mask[:,:,:] = 0
+                    elif idx == 0:
+                        mask[idx:, idx, :] = 0
+                    elif idx == mask.shape[1]:
+                        mask[:idx, idx - 1, :] = 0
+                    else:
+                        mask[:idx, idx - 1, :] = 0
+                        mask[idx:, idx, :] = 0
+
+                self.observation[1] = self.observation[1][mask].reshape((traf.ntraf - len(done_idx), traf.ntraf - len(done_idx) - 1, self.shared_state_size))
+        else:
+            self.observation = np.delete(self.observation, done_idx, 0)
+        self.idx = np.delete(traf.id, done_idx)
+        return prev_observation, self.reward, replay_observation, done
+
 
     def generate_reward(self):
-        global_reward = 1
-        local_reward = np.ones((traf.ntraf,1))
-        self.reward = local_reward + global_reward
+        """ Generate reward scalar for each aircraft"""
+        global_reward = -0.5
+        reached_reward = self.done * 10
+        los_reward = np.zeros(reached_reward.shape)
+        if len(self.los_pairs) > 0:
+            ac_list = [ac[0] for ac in self.los_pairs]
+            traf_list = list(traf.id)
+            idx = [traf_list.index(x) for x in ac_list]
+            for i in idx:
+                los_reward[i] = los_reward[i] - 50
+        self.reward = np.asarray(reached_reward + global_reward + los_reward).reshape((reached_reward.shape[0],1))
 
-    def generate_observation(self):
-        # Produce a running average off all variables in the field with regard to the initial state convergence that is being tackled in the problem.
-        obs = np.array([traf.lat, traf.lon, traf.tas, traf.cas, traf.alt]).transpose()
-        self.state_normalizer.observe(obs)
-        obs = self.state_normalizer.normalize(obs)
+
+    def generate_observation_continuous(self):
+        """ Generate observation of size N_aircraft x state_size"""
+        destidx = navdb.getaptidx('EHAM')
+        lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
+        qdr, dist = qdrdist_matrix(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
+        qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
+        obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist]).transpose()
+
         return obs
 
-    def check_termination(self):
-        self.done = False
+    def generate_shared_observation(self):
+        """
+        Generate the shared observation sequences for the aircraft
+        States are distance, heading, bearing, latitude longitude, (speed)
+
+        The observation are Ntraf sequences of size (Ntraf - 1 , x)
+        """
+
+        # Generate distance matrix
+        dist, qdr = qdrdist_matrix(np.mat(traf.lat), np.mat(traf.lon), np.mat(traf.lat), np.mat(traf.lon))
+        dist, qdr = np.array(dist), np.array(qdr)
+        shared_obs = np.zeros((traf.ntraf, traf.ntraf - 1, self.shared_state_size))
+        for i in range(traf.ntraf):
+            # shared_obs = np.zeros((traf.ntraf - 1, self.shared_state_size))
+            shared_obs[i, :, 0] = np.delete(dist[i,:], i, 0)
+            shared_obs[i, :, 1] = np.delete(qdr[i,:]/180., i, 0)  # divide by 180
+            shared_obs[i, :, 2] = np.delete(traf.lat, i)
+            shared_obs[i, :, 3] = np.delete(traf.lon, i)
+            shared_obs[i, :, 4] = np.delete(traf.hdg/180., i)     # divide by 180
+            shared_obs[i, :, 5] = np.delete(traf.cas, i)
+        return shared_obs
+
+
+    def generate_observation_discrete(self):
+        # Produce a running average off all variables in the field with regard to the initial state convergence that is being tackled in the problem.
+        obs = np.array([traf.lat, traf.lon, traf.tas, traf.cas, traf.alt]).transpose()
+        #self.state_normalizer.observe(obs)
+        #obs = self.state_normalizer.normalize(obs)
+
+        #Get the normalized coordinates of the last and current waypoint.
+        coords = np.empty((traf.ntraf, 4))
+        for i in range(traf.ntraf):
+            ac = agent.ac_dict.get(traf.id[i])
+
+            if ac is None:
+                coords[i, 0:2] = np.array([0,0])
+                coords[i, 2:4] = np.array([0,0])
+            else:
+                lastwp = ac.lastwp
+                curwp = ac.curwp
+                if curwp == '':
+                    curwp = 'dummy'
+                if lastwp == '':
+                    lastwp = 'dummy'
+
+                coords[i, 0:2] = np.asarray(self.wp_db.get(lastwp))
+                coords[i, 2:4] = np.asarray(self.wp_db.get(curwp))
+        obs = np.hstack((obs, coords))
+        return obs
+
+    def action_command(self, action):
+        for i in range(len(self.idx)):
+            stack.stack('HDG {} {}'.format(self.idx[i], action[i]))
+
+    def check_reached(self):
+        qdr, dist = qdrdist(traf.lat, traf.lon,
+                                traf.actwp.lat, traf.actwp.lon)  # [deg][nm])
+
+        # check which aircraft have reached their destination by checkwaypoint type = 3 (destination) and the relative
+        # heading to this waypoint is exceeding 150
+        dest = np.asarray([traf.ap.route[i].wptype[traf.ap.route[i].iactwp] for i in range(traf.ntraf)]) == 3
+        away = np.abs(degto180(traf.trk % 360. - qdr % 360.)) > 100.
+        d = dist<2
+        reached = np.where(away * dest * d)[0]
+        # print('track', traf.trk, qdr, dist)
+
+        # What is the desired behaviour. When an aircraft has reached, it will be flagged as reached.
+        # Therefore the aircraft should get a corresponding reward as well for training purposes in the replay memory
+        # Next the corresponding aircraft should be deleted.
+        # If no more aircraft are present, next episode should start.
+        # print('reached', reached)
+        done = np.zeros((traf.ntraf), dtype=bool)
+        done[reached] = True
+        self.done = done
+
 
     def generate_commands(self):
         pass
 
+    def load_waypoints(self):
+        wpts = np.loadtxt('plugins/ml/routes/testroute.txt')
+        rows = wpts.shape[0]
+        cols = wpts.shape[1]
+        wpts = wpts.reshape((int(rows * cols / 2), 2))
+        destidx = navdb.getaptidx('EHAM')
+        lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
+        wpts = np.vstack((wpts, np.array([lat,lon])))
+        wpts = norm(wpts, axis=0)
+        eham = wpts[-1,:]
+        wpts = wpts[:-1,:].reshape((rows, cols))
+        wp_db = dict()
+        i = 0
+        for j in range(wpts.shape[0]):
+            for k in range(int(wpts.shape[1] / 2)):
+                #               stack.stack('DEFWPT RL{}{}{}, {}, {}, FIX'.format(i, j, k, wpts[j,k*2], wpts[j,k*2+1]))
+                wp_db['RL{}{}{}'.format(i, j, k)] = [wpts[j, k * 2], wpts[j, k * 2 + 1]]
+        wp_db['EHAM'] = [eham[0], eham[1]]
+        wp_db['dummy']=[0,0]
+        return wp_db
 
+    def reset(self):
+        self.done = np.array([False])
+        self.episode += 1
+        stack.stack('open ./scenario/bart/{}'.format(self.scn))
+        load_routes()
 
+    def get_done(self):
+        if self.done.all() == True:
+            return True
+        else:
+            return False
+
+    def get_observation(self):
+        return self.observation
 
 
 class Agent:
-    def __init__(self):
-        self.ac_dict = {}
-        self.speed_values = [175, 200, 225, 250]
-        self.wp_action_size=3
-        self.spd_action_size=len(self.speed_values)
-        self.state_size=5
-        #TODO: Set the correct action size to correspond with the desired action output and neural network architecture
-        self.action_size=1 #self.wp_action_size + self.spd_action_size
-        self.max_agents = 80
-        self.action = []
-        self.memory_size = 10000
-        self.i = 0
-
-
-
-        self.batch_size = 4
+    def __init__(self, state_size, action_size, training):
+        # Config parameters
+        self.train_indicator = training
+        self.action_size = action_size
+        self.state_size = state_size
+        self.shared_obs_size = 6
+        self.batch_size = 32
         self.tau = 0.9
         self.gamma = 0.99
         self.critic_learning_rate = 0.001
-        self.actor_learning_rate = 0.0001
+        self.actor_learning_rate = 0.001
         self.loss = 0
-        self.train_indicator = True
+        self.cumreward=0
+        self.max_agents = None
+        self.OU = OrnsteinUhlenbeckActionNoise(np.array([0]), sigma=0.15, theta=.5, dt=0.1)
+        self.memory_size = 10000
+        self.max_agents = 10
 
+        # TODO: Move these to config file
+        self.load_dir = 'output/20181024_122347/'
+        self.load_ep  = '02500'
 
+        self.ac_dict = {}
+        self.speed_values = [175, 200, 225, 250]
+        self.wp_action_size = 3
+        self.spd_action_size = len(self.speed_values)
 
-        # config = tf.ConfigProto()
-        # config.gpu_options.allow_growth = True
-        # self.sess = tf.Session(config=config)
-        self.sess = tf.Session()
+        #self.wp_action_size * self.spd_action_size
+
+        self.action = []
+        self.summary_counter = 0
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        config.allow_soft_placement = True
+        self.sess = tf.Session(config=config)
         K.set_session(self.sess)
 
-        self.actor = ActorNetwork(self.sess, self.state_size, self.action_size, self.batch_size, self.tau, self.actor_learning_rate)
-        self.critic = CriticNetwork(self.sess, self.state_size, self.action_size, self.batch_size, self.tau, self.critic_learning_rate)
+        self.actor = ActorNetwork_shared_obs(self.sess, self.state_size, self.shared_obs_size, self.action_size,
+                                             self.max_agents, self.batch_size, self.tau, self.actor_learning_rate)
+        self.critic = CriticNetwork_shared_obs(self.sess, self.state_size, self.shared_obs_size, self.action_size,
+                                               self.max_agents, self.batch_size, self.tau, self.critic_learning_rate)
         self.replay_memory = ReplayMemory(self.memory_size)
 
         #Now load the weight
-        try:
-            self.actor.model.load_weights("actormodel.h5")
-            self.critic.model.load_weights("criticmodel.h5")
-            self.actor.target_model.load_weights("actormodel.h5")
-            self.critic.target_model.load_weights("criticmodel.h5")
-            print("Weights load successfully")
-        except:
-            print("Cannot find the weights")
+        if not self.train_indicator:
+            try:
+                self.actor.model.load_weights(self.load_dir + "actor_model" + self.load_ep + ".h5")
+                self.critic.model.load_weights(self.load_dir + "critic_model" + self.load_ep + ".h5")
+                self.actor.target_model.load_weights(self.load_dir + "target_actor_model" + self.load_ep + ".h5")
+                self.critic.target_model.load_weights(self.load_dir + "target_critic_model" + self.load_ep + ".h5")
+                print("Weights load successfully")
+            except:
+                print("Cannot find the weights")
 
         # Set up summary Ops
         self.summary_ops, self.summary_vars = self.build_summaries()
 
         self.sess.run(tf.global_variables_initializer())
-        summary_dir = './output/tf_summaries/'
+        if self.train_indicator:
+            summary_dir = log_dir + 'training/'
+        else:
+            summary_dir = log_dir + 'test/'
         self.writer = tf.summary.FileWriter(summary_dir, self.sess.graph)
 
     def pad_zeros(self, array, max_timesteps):
-        if array.shape[0] == max_timesteps:
-            return array
-        else:
-            result = np.zeros((max_timesteps, array.shape[1]))
-            result[:array.shape[0], :] = array
-            return result
+        """Pad 0's for local observation sequences"""
+        # if array.shape[0] == max_timesteps:
+        #     return array
+        # else:
+        # result = np.zeros((max_timesteps, array.shape[-1], self.action_size))
+        result = np.zeros((max_timesteps, array.shape[-1]))
+        if len(array.shape)==3:
+            array = array.reshape((array.shape[1], array.shape[2]))
+        result[0:array.shape[0], :] = array
+        return result
+
+    def pad_nines(self, array, max_timesteps):
+        """Pad -999 for shared observations sequences"""
+        zeros = -999.0 * np.ones((max_timesteps, max_timesteps - 1, array.shape[-1]))
+        if len(array.shape)==4:
+            array=array.reshape((array.shape[1:]))
+        zeros[0:array.shape[0], 0:array.shape[1], :] = array
+        return zeros
 
     def build_summaries(self):
         episode_reward = tf.Variable(0.)
@@ -296,9 +520,9 @@ class Agent:
         summary_str = self.sess.run(self.summary_ops, feed_dict={
             self.summary_vars[0]: np.sum(reward),
                     })
-        self.writer.add_summary(summary_str, self.i)
+        self.writer.add_summary(summary_str, self.summary_counter)
         self.writer.flush()
-        self.i += 1
+        self.summary_counter += 1
 
     def save_model(self, model, name):
         #yaml saves the model architecture
@@ -306,56 +530,65 @@ class Agent:
         with open("{}.yaml".format(name), 'w') as yaml_file:
             yaml_file.write(model_yaml)
         #Serialize weights to HDF5 format
-        model.save_weights("{}.h5".format(name))
+        model.save_weights("{}.h5".format(name))\
+
+    def save_models(self, episode):
+        self.save_model(self.actor.model, log_dir+'actor_model{0:05d}'.format(episode))
+        self.save_model(self.actor.target_model, log_dir+'target_actor_model{0:05d}'.format(episode))
+        self.save_model(self.critic.model, log_dir+'critic_model{0:05d}'.format(episode))
+        self.save_model(self.critic.target_model, log_dir+'target_critic_model{0:05d}'.format(episode))
 
     def train(self):
-        batch = self.replay_memory.getBatch(self.batch_size)
-        for seq in batch:
-            print(seq)
-            print(seq[0].shape)
-
-        # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
-        # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
-        # calculations
-        sequence_length = [seq[0].shape[0] for seq in batch]
-        max_t = max(sequence_length)
-
-        states = np.asarray([self.pad_zeros(seq[0], max_t) for seq in batch])
-        actions = np.asarray([self.pad_zeros(seq[1], max_t) for seq in batch])
-        rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
-        new_states = np.asarray([self.pad_zeros(seq[3], max_t) for seq in batch])
-        dones = np.asarray([seq[4] for seq in batch])
-        y_t = actions.copy()
-
-        # print(states.shape, states)
-        # print('batch', batch)
-        # print('new_states - ', new_states.shape)
-        # print('predicted', self.actor.target_model.predict(new_states))
-        target_q_values = self.critic.target_model.predict([new_states, self.actor.target_model.predict(new_states)])
-        # print(target_q_values.shape)
-
-        #Compute the target values
-        for k in range(len(batch)):
-            if dones[k]:
-                y_t[k] = rewards[k]
-            else:
-                # print(rewards[k].shape, target_q_values[k].shape, y_t[k].shape)
-                y_t[k] = rewards[k] + self.gamma * target_q_values[k]
-
         if self.train_indicator:
-            print(states.shape, actions.shape, y_t.shape)
-            # self.loss += self.critic.model.train_on_batch([states, actions], y_t)
+            # TODO: Check that the gradient calculator ignores the zero input sequences.
+            batch = self.replay_memory.getBatch(self.batch_size)
+
+            # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
+            # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
+            # calculations
+            # sequence_length = [seq[0].shape[0] for seq in batch]
+            # max_t = max(sequence_length)
+            max_t = self.max_agents
+            if type(batch[0][0])==list:
+                # states = [[self.pad_zeros(seq[0][0], max_t), self.pad_nines(seq[0][1], max_t)] for seq in batch]
+                states = [ np.asarray([self.pad_zeros(seq[0][0], max_t) for seq in batch]) ]
+                states.append(np.asarray([self.pad_nines(seq[0][1], max_t) for seq in batch ]))
+                # new_states = [[self.pad_zeros(seq[3][0], max_t), self.pad_nines(seq[3][1], max_t)] for seq in batch]
+                new_states = [ np.asarray([self.pad_zeros(seq[3][0], max_t) for seq in batch]) ]
+                new_states.append(np.asarray([self.pad_nines(seq[3][1], max_t) for seq in batch ]))
+
+            else:
+                states = np.asarray([[self.pad_zeros(seq[0], max_t)] for seq in batch])
+                new_states = np.asarray([[self.pad_zeros(seq[3], max_t)] for seq in batch])
+
+            actions = np.asarray([self.pad_zeros(seq[1], max_t) for seq in batch])
+            rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
+            dones = np.asarray([seq[4] for seq in batch])
+
+            # target_q_values = self.critic.target_model.predict(new_states, self.actor.target_model.predict(new_states))
+            target_q_values = self.critic.target_model.predict([new_states[0], new_states[1], self.actor.target_model.predict(new_states)])
+            y_t = target_q_values.copy()
+            #Compute the target values
+            for k in range(len(batch)):
+                if dones[k]:
+                    y_t[k] = rewards[k].reshape((max_t, 1))
+                else:
+                    y_t[k] = rewards[k].reshape((max_t, 1)) + self.gamma * target_q_values[k]
+
+
             actions_for_grad = self.actor.model.predict(states)
             grads = self.critic.gradients(states, actions_for_grad)
             self.critic.train(states, actions, y_t)
             self.actor.train(states, grads)
             self.actor.update_target_network()
             self.critic.update_target_network()
-            print("training epoch succesful")
 
 
     def update_replay_memory(self, state, reward, done, new_state):
-        self.replay_memory.add(state, self.action, reward, new_state, done)
+        # max_t = state[0].shape[0]
+        # print('update_replay', state.shape, reward.shape, self.action.reshape(max_t, self.action_size).shape, self.mask.reshape(max_t, self.action_size).shape)
+        self.replay_memory.add(state, self.action.reshape(self.max_agents, self.action_size), reward, new_state, done)
+
 
     def __update_aircraft_waypoints(self):
         """
@@ -366,11 +599,12 @@ class Agent:
         for i in np.arange(traf.ntraf):
 
             actwp = traf.ap.route[i].iactwp
-            if traf.ap.route[i].wptype[actwp] == 3:
-                ac_values = self.ac_dict.get(traf.id[i])
-                ac_values[0] = 1
-                self.ac_dict[traf.id[i]] = [traf.id[i]]
-
+            ac = self.ac_dict.get(traf.id[i])
+            if traf.ap.route[i].wptype[actwp] == 3 and actwp<ac.route_length:
+                ac.set_wp_flag(1)
+                self.ac_dict[traf.id[i]] = ac
+            elif traf.ap.route[i].wptype[actwp] == 3 and actwp >= ac.route_length:
+                ac.set_dest_flag(1)
         # return list of waypoints
 
 
@@ -381,9 +615,8 @@ class Agent:
         x = 1 when aircraft must select new waypoint, otherwise 0
         """
         for id in traf.id:
-            # print(traf.id)
             if id not in self.ac_dict:
-                self.ac_dict[id]=[1,[0,0,0]]
+                self.ac_dict[id]=Aircraft(id)
         # If aircraft sizes are not equal then aircraft also have to be deleted
         if len(self.ac_dict) < traf.ntraf:
             for key in self.ac_dict.keys():
@@ -398,75 +631,174 @@ class Agent:
     """
 
 
-
     def get_mask(self):
         """
         Creates a mask for valid actions an aircraft can select. Masks the aircraft in the dictionary set that require a new waypoint to be selected with 1.
         :return:
         """
-        actionmask = np.zeros((self.wp_action_size, traf.ntraf))
+        actionmask = np.zeros((traf.ntraf, self.spd_action_size, self.wp_action_size))
         for i in np.arange(traf.ntraf):
-            value = self.ac_dict.get(traf.id[i])
-            if value[0]==0:
-                actionmask[value[1][2], i]=1
+            aircraft = self.ac_dict.get(traf.id[i])
+            # If an aircraft does not need a new action only speed changes while flying towards the current waypoint are
+            # allowed. Otherwise all actions are allowed.
+            if aircraft.dest_flag == 1:
+                actionmask[i,:,0] = 1
+            elif aircraft.wpflag == 0:
+                actionmask[i, :, aircraft.k] = 1
             else:
-                actionmask[:,i]=1
-        return actionmask
+                actionmask[i,:,:]=1
+
+        return actionmask.reshape(1, traf.ntraf, self.action_size)
 
 
-    def act(self, state):
-        # Select actions for each aircraft
-        self.__update_acdict_entries()
-        # print(self.ac_dict)
-        # __update_aircraft_waypoints()
+    def act_continuous(self, state):
+        n_aircraft = int(np.prod(state[0].shape)/self.state_size)
+        if n_aircraft==0:
+            return
 
+        state[0] = self.pad_zeros(state[0], self.max_agents).reshape((1, self.max_agents, self.state_size))
+        state[1] = self.pad_nines(state[1], self.max_agents).reshape((1, self.max_agents, self.max_agents-1, self.shared_obs_size))
+        self.action = self.actor.predict(state)
+
+        noise = self.OU()
+
+        if self.train_indicator:
+            # Add exploration noise and clip to range [-1, 1] for action space
+            self.action = self.action + noise
+            self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
+            self.action = np.minimum(np.ones(self.action.shape), self.action)
+
+        # print('actionstate', self.action, state)
+        # Apply Bell curve here to sample from to get action values
+        mu = 0
+        sigma = 0.5
+        y_offset = 0.107982 + 6.69737e-08
+        action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
+
+
+        dist_limit = 5 #nm
+        dist = state[0][:,:, 4] #.transpose()
+        dist = dist.reshape(action.shape)
+        mul_factor = 90*np.ones(dist.shape)
+
+        # print(mul_factor.shape, dist.shape)
+        wheredist = np.where(dist<dist_limit)[0]
+        mul_factor[wheredist] = dist[wheredist] / dist_limit * 90
+        minus = np.where(self.action<0)[0]
+        plus = np.where(self.action>=0)[0]
+        dheading = np.zeros(action.shape)
+        # print(dheading.shape, minus.shape, mul_factor.shape, action.shape)
+        dheading[minus] = (action[minus] - 1) * mul_factor[minus]
+        dheading[plus] = np.abs(action[plus]-1) * mul_factor[plus]
+        # print('selfaction', self.action)
+        # print('dheading', dheading)
+        action[minus] = -1*action[minus]
+        qdr = state[0][:,:,3].transpose()
+        # print('qdr', qdr)
+        heading =  qdr + dheading
+
+        return heading.ravel()[0:n_aircraft]
+
+
+    def act_discrete(self, state):
         # Infer action selection
-        self.action = np.random.random((traf.ntraf, 1))
-        wp_action = np.random.random((self.wp_action_size,traf.ntraf))
-        spd_action = np.random.random((self.spd_action_size,traf.ntraf))
+        # actions are grouped per as follows
+        #    Waypoints
+        # s [[0, 1, 2, 3],
+        # p [4, 5, 6, 7]
+        # d [8, 9, 10, 11],
+        #   [12, 13, 14, 15]]
+        self.__update_acdict_entries()
+        self.__update_aircraft_waypoints()
 
         # Retrieve mask for action selection
-        mask = self.get_mask()
-        # print(mask)
+        self.mask = self.get_mask() # self.mask = np.array([[[1,1,1,0,0,0,0,0,0,0,0,0]]])
+        self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size)), self.mask])
+        self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size))])
+        # print('mask', self.mask)
+        # print(self.action[0,0,:])
+        action = np.zeros((traf.ntraf, 1))
+        for i in range(traf.ntraf):
+            action[i] = np.random.choice(a=np.arange(self.action_size), p=self.action[0,i,:])
 
-        # Select action
-        wp_action_masked = wp_action * mask
-        # print(wp_action_masked)
-
-        wp_ind = np.argmax(wp_action, axis=0) # wp_action_masked
-        spd_ind = np.argmax(spd_action, axis=0)
-        speed_actions = [self.speed_values[i] for i in spd_ind]
+        wp_ind = action % self.wp_action_size
+        spd_ind = np.floor(action / self.wp_action_size).astype(int)
+        # print('spd_ind', spd_ind)
+        speed_actions = [self.speed_values[i[0]] for i in spd_ind]
 
         # Produce action command
         # Get the number of segments in main route index and construct
-        maxsegments = 4 #TODO: Dummy to replace
+        maxsegments = 4
 
         # Action is already selected. Just generate the commands ;)
 
         for i in np.arange(traf.ntraf):
             # Set wpindex
-            ac_name = traf.id[i]
-            wp_values = self.ac_dict.get(ac_name)
+            ac = self.ac_dict.get(traf.id[i])
             # Only add wpts to route if required
             actwp = traf.ap.route[i].iactwp
-            if traf.ap.route[i].wptype[actwp] == 3: # actwp == 3 corresponds to destination
-                wp_name = wp_values[1]
-                wp_name[2] = wp_ind[i]
-                self.ac_dict[traf.id[i]] = [0, wp_name]
-                stack.stack("{} ADDWPT RL{}".format(ac_name,  ''.join(map(str, wp_name))))
-                wp_name[1] = wp_name[1] + 1
+
+            if ac.wpflag==1: # actwp == 3 corresponds to destination
+                wp_name = [ac.i, ac.j, ac.k]
+                wp_name[2] = int(wp_ind[i])
+                wpt = 'RL{}'.format(''.join(map(str, wp_name)))
+                stack.stack("{} ADDWPT {}".format(ac.id,  wpt))
+                ac.set_k(int(wp_ind[i]))
+                ac.increment_j()
+                ac.set_wp_flag(0)
+                ac.set_wp(wpt)
+                self.ac_dict[traf.id[i]] = ac
+
+            elif actwp>=ac.route_length and ac.curwp!='EHAM':
+                dest='EHAM'
+                ac.set_wp(dest)
 
             # Create speed command
-            stack.stack("{} SPD {}".format(ac_name, speed_actions[i]))
+            stack.stack("{} SPD {}".format(ac.id, speed_actions[i]))
 
-        # Wp command stack.stack(callsign ADDWPT wpname)
-        # Spd command
+    def update_cumreward(self, reward):
+        pass
+        # self.cumreward += reward
+
+    def reset(self):
+        self.write_summaries(self.cumreward)
+        self.cumreward=0
+        self.ac_dict={}
 
 
+class Aircraft():
+    def __init__(self, id):
+        self.lastwp = ''
+        self.curwp  = ''
+        self.i = 0
+        self.j = 0
+        self.k = 0
+        self.wpflag = 1
+        self.dest_flag = 0
+        self.id = id
+        self.route_length = 3
+
+    def set_wp(self, wp):
+        self.lastwp = self.curwp
+        self.curwp = wp
+
+    def set_wp_flag(self, x):
+        self.wpflag = x
+
+    def set_k(self, x):
+        self.k = x
+
+    def set_dest_flag(self, x):
+        self.dest_flag = x
+
+    def increment_j(self):
+        self.j += 1
 
 
-
-
-
-
-
+def bell_curve(x, mu=0., sigma=1., y_offset=0, scaled=1):
+    # Computes Gaussian and scales the peak to 1.
+    y = 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-np.power(x - mu, 2) / (2 * sigma ** 2)) + y_offset
+    if scaled:
+        y_scale = 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-np.power(0, 2) / (2 * sigma ** 2)) + y_offset
+        y = y/y_scale
+    return y
