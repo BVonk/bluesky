@@ -38,12 +38,13 @@ from keras.optimizers import Adam, RMSprop
 from keras.layers.merge import Add, Multiply, Subtract
 import keras.backend as K
 import tensorflow as tf
+from shutil import copyfile
 
 
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
-    global env, agent, update_interval, routes, log_dir, CONF
+    global env, agent, update_interval, routes, log_dir
 
     # Create logging folder
     log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
@@ -51,6 +52,9 @@ def init_plugin():
         os.makedirs(log_dir)
         os.makedirs(log_dir+'training/')
         os.makedirs(log_dir+'test/')
+
+
+    copyfile('settings.cfg', log_dir+'settings.cfg')
 
     # config
     agent = Agent(CONF.state_size, CONF.shared_state_size, CONF.action_size, CONF.tau, CONF.gamma, CONF.critic_lr,
@@ -61,8 +65,7 @@ def init_plugin():
     # routes = dict()
 
     # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
-    # TODO: Every x iterations a test episode must be run to see how far the exploration has come so far
-    # TODO: Check that cumulative reward update
+    # TODO: Every x iterations a test episode must be run to see how far the exploration has come so far for tensorboard cumulative reward
     # TODO: Find system performance indicator
     # TODO: Implement minimum wake separation
     # TODO: Set destination for every aircraft (FAF)
@@ -70,7 +73,6 @@ def init_plugin():
     # TODO: Fix circling target problem, this problem occurs at higher speeds
     # TODO: Los_pairs must be fixed 2D, not 3D
     # TODO: Normalize states to input size where possible. eg. Take lat lon in FIR to normalize.
-
 
     config = {
         # The name of your plugin
@@ -156,7 +158,7 @@ def preupdate():
     elif traf.ntraf!=0:
         # Construct new state
         state, reward, new_state, done = env.step()
-        agent.update_cumreward(reward)
+        agent.update_cum_reward(reward)
         agent.update_replay_memory(state, reward, done, new_state)
 
         if agent.replay_memory.num_experiences > agent.batch_size:
@@ -239,7 +241,9 @@ class Environment:
         prev_observation = self.observation
         self.observation = [self.generate_observation_continuous(), self.generate_shared_observation()]
         # Check termination conditions
-        self.los_pairs = detect_los(traf, traf, traf.asas.R, traf.asas.dh)
+        # self.los_pairs = detect_los(traf, traf, traf.asas.R, traf.asas.dh)
+        # Add in 9999999 for vertical protection zone to ignore vertical separation
+        self.los_pairs = detect_los(traf, traf, traf.asas.R, 9999999)
         self.check_reached()
         self.generate_reward()
         done = True if self.done.all() == True else False
@@ -446,7 +450,7 @@ class Agent:
         self.critic_learning_rate = critic_lr
         self.actor_learning_rate = actor_lr
         self.loss = 0
-        self.cumreward=0
+        self.cum_reward=0
         self.memory_size = memory_size
         self.max_agents = max_agents
         self.OU = OrnsteinUhlenbeckActionNoise(np.zeros(self.max_agents), sigma=sigma, theta=theta, dt=dt)
@@ -487,7 +491,7 @@ class Agent:
                 print("Cannot find the weights")
 
         # Set up summary Ops
-        self.summary_ops, self.summary_vars = self.build_summaries()
+        self.summary_ops, self.summary_vars, self.summary_ops_test, self.summary_vars_test = self.build_summaries()
 
         self.sess.run(tf.global_variables_initializer())
         if self.train_indicator:
@@ -519,14 +523,16 @@ class Agent:
     def build_summaries(self):
         episode_reward = tf.Variable(0.)
         tf.summary.scalar("Reward", episode_reward)
-        # tf.summary.histogram("Histogram", self.actor.weights)
-        # episode_ave_max_q = tf.Variable(0.)
-        # tf.summary.scalar("Qmax Value", episode_ave_max_q)
         summary_vars = [episode_reward]# , episode_ave_max_q]
         summary_ops = tf.summary.merge_all()
-        return summary_ops, summary_vars
 
-    def write_summaries(self, reward):
+        test_reward = tf.Variable(0.)
+        summary_ops_test = tf.summary.scalar("Test_reward", test_reward)
+        summary_vars_test = [test_reward]
+        # summary_ops_test = tf.summary.tensor_summary('test', test_reward)
+        return summary_ops, summary_vars, summary_ops_test, summary_vars_test
+
+    def write_train_summaries(self, reward):
         summary_str = self.sess.run(self.summary_ops, feed_dict={
             self.summary_vars[0]: np.sum(reward),
                     })
@@ -534,13 +540,23 @@ class Agent:
         self.writer.flush()
         self.summary_counter += 1
 
+    def write_test_summaries(self, reward):
+        summary_str = self.sess.run(self.summary_ops_test, feed_dict={
+            self.summary_vars_test[0]: np.sum(reward),
+        })
+        self.writer.add_summary(summary_str, self.summary_counter)
+        self.writer.flush()
+        self.summary_counter += 1
+
+
+
     def save_model(self, model, name):
         #yaml saves the model architecture
         model_yaml = model.to_yaml()
         with open("{}.yaml".format(name), 'w') as yaml_file:
             yaml_file.write(model_yaml)
         #Serialize weights to HDF5 format
-        model.save_weights("{}.h5".format(name))\
+        model.save_weights("{}.h5".format(name))
 
     def save_models(self, episode):
         self.save_model(self.actor.model, log_dir+'actor_model{0:05d}'.format(episode))
@@ -672,7 +688,8 @@ class Agent:
 
         if self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
-            self.action = self.action + noise
+            if not self.summary_counter%CONF.test_freq==0:
+                self.action = self.action + noise
             self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
             self.action = np.minimum(np.ones(self.action.shape), self.action)
 
@@ -757,14 +774,18 @@ class Agent:
             # Create speed command
             stack.stack("{} SPD {}".format(ac.id, speed_actions[i]))
 
-    def update_cumreward(self, reward):
+    def update_cum_reward(self, reward):
+        self.cum_reward += 1
         pass
-        # self.cumreward += reward
+        # self.cum_reward += reward
 
     def reset(self):
-        self.write_summaries(self.cumreward)
-        self.cumreward=0
-        self.ac_dict={}
+        if self.summary_counter%CONF.test_freq == 0:
+            self.write_test_summaries(self.cum_reward)
+        else:
+            self.write_train_summaries(self.cum_reward)
+        self.cum_reward = 0
+        # self.ac_dict={}
 
 
 class Aircraft():
