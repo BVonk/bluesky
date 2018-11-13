@@ -68,6 +68,8 @@ def init_plugin():
     # TODO: Set destination for every aircraft (FAF)
     # TODO: Use BlueSKy logging / plotting
     # TODO: Fix circling target problem, this problem occurs at higher speeds
+    # TODO: Los_pairs must be fixed 2D, not 3D
+    # TODO: Normalize states to input size where possible. eg. Take lat lon in FIR to normalize.
 
 
     config = {
@@ -146,6 +148,7 @@ def init():
 
 def preupdate():
     # print('settings {}'.format(CONF.conf))
+    # First run the environment must be initialized to get the first state ready before model inference can take place.
     if sim.simt < CONF.update_interval*1.5:
         new_state = env.init()
 
@@ -163,12 +166,15 @@ def preupdate():
         # aircraft no longer exists in the stack.
         new_state = env.get_observation()
 
-    if traf.ntraf!=0:
+    collision = env.check_collision()
+
+    if traf.ntraf!=0 and not collision:
         action = agent.act_continuous(new_state)
         env.action_command(action)
 
+
     # Check if all aircraft in simulation landed and there are no more scenario commands left
-    if env.get_done() and len(stack.get_scendata()[0])==0:
+    if (env.get_done() and len(stack.get_scendata()[0])==0) or collision:
         # Reset environment states and agent states
         if env.episode % 50==0:
             agent.save_models(env.episode)
@@ -176,11 +182,8 @@ def preupdate():
         agent.reset()
 
 
-
-
 def reset():
     pass
-
 
 def load_routes():
     wpts = np.loadtxt('plugins/ml/routes/testroute.txt')
@@ -229,7 +232,6 @@ class Environment:
 
     def init(self):
         self.observation = [self.generate_observation_continuous(), self.generate_shared_observation()]
-
         return self.observation
 
 
@@ -247,18 +249,16 @@ class Environment:
             stack.stack("DEL {}".format(traf.id[idx]))
 
         # There is a mismatch between the aircraft size in the observation returned for the replay memory and the
-        # observation required to select actions when an aircraft is deleted. Therefore two separate observations must
-        # be used.
+        #         # observation required to select actions when an aircraft is deleted. Therefore two separate observations must
+        #         # be used.
         replay_observation = self.observation
 
         if type(self.observation)==list:
             self.observation[0] = np.delete(self.observation[0], done_idx, 0)
-            print(self.observation[0].shape)
             if self.observation[0].shape[0]==0:
                 self.observation[1] = np.delete(self.observation[1], np.arange(self.observation[1].shape[0]), 0)
             else:
                 mask = np.ones(self.observation[1].shape, dtype=np.bool)
-                print('mask', done_idx, mask.shape)
                 for idx in done_idx:
                     mask[idx, :, :] = 0
                     if idx == 0 and mask.shape[1]==0:
@@ -274,9 +274,10 @@ class Environment:
                 self.observation[1] = self.observation[1][mask].reshape((traf.ntraf - len(done_idx), traf.ntraf - len(done_idx) - 1, self.shared_state_size))
         else:
             self.observation = np.delete(self.observation, done_idx, 0)
-        self.idx = np.delete(traf.id, done_idx)
-        return prev_observation, self.reward, replay_observation, done
 
+        self.idx = np.delete(traf.id, done_idx)
+
+        return prev_observation, self.reward, replay_observation, done
 
     def generate_reward(self):
         """ Generate reward scalar for each aircraft"""
@@ -328,10 +329,10 @@ class Environment:
     def generate_observation_discrete(self):
         # Produce a running average off all variables in the field with regard to the initial state convergence that is being tackled in the problem.
         obs = np.array([traf.lat, traf.lon, traf.tas, traf.cas, traf.alt]).transpose()
-        #self.state_normalizer.observe(obs)
-        #obs = self.state_normalizer.normalize(obs)
+        # self.state_normalizer.observe(obs)
+        # obs = self.state_normalizer.normalize(obs)
 
-        #Get the normalized coordinates of the last and current waypoint.
+        # Get the normalized coordinates of the last and current waypoint.
         coords = np.empty((traf.ntraf, 4))
         for i in range(traf.ntraf):
             ac = agent.ac_dict.get(traf.id[i])
@@ -355,6 +356,12 @@ class Environment:
     def action_command(self, action):
         for i in range(len(self.idx)):
             stack.stack('HDG {} {}'.format(self.idx[i], action[i]))
+
+    def check_collision(self):
+        if len(self.los_pairs)!=0:
+            return True
+        else:
+            return False
 
     def check_reached(self):
         qdr, dist = qdrdist(traf.lat, traf.lon,
@@ -404,9 +411,17 @@ class Environment:
 
     def reset(self):
         self.done = np.array([False])
+        self.los_pairs = []
+        self.done = []
         self.episode += 1
+        self.prev_traf = 0
+        self.observation = np.zeros((1,self.state_size))
+        self.done = np.array([False])
+        self.idx = []
+        self.los_pairs = []
+
         stack.stack('open ./scenario/bart/{}'.format(self.scn))
-        load_routes()
+        # load_routes()
 
     def get_done(self):
         if self.done.all() == True:
@@ -580,8 +595,6 @@ class Agent:
 
 
     def update_replay_memory(self, state, reward, done, new_state):
-        # max_t = state[0].shape[0]
-        # print('update_replay', state.shape, reward.shape, self.action.reshape(max_t, self.action_size).shape, self.mask.reshape(max_t, self.action_size).shape)
         self.replay_memory.add(state, self.action.reshape(self.max_agents, self.action_size), reward, new_state, done)
 
 
@@ -648,7 +661,6 @@ class Agent:
 
     def act_continuous(self, state):
         n_aircraft = int(np.prod(state[0].shape)/self.state_size)
-        print('n_aircraft', n_aircraft, state[0].shape)
         if n_aircraft==0:
             return
 
@@ -657,7 +669,6 @@ class Agent:
         self.action = self.actor.predict(state)
 
         noise = self.OU().reshape(self.action.shape)
-        print('noise', noise.shape)
 
         if self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
@@ -665,7 +676,6 @@ class Agent:
             self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
             self.action = np.minimum(np.ones(self.action.shape), self.action)
 
-        # print('actionstate', self.action, state)
         # Apply Bell curve here to sample from to get action values
         mu = 0
         sigma = 0.5
@@ -675,24 +685,18 @@ class Agent:
 
         dist_limit = 5 # nm
         dist = state[0][:,:, 4] # .transpose()
-        print('dist', dist.shape, action.shape)
         dist = dist.reshape(action.shape)
         mul_factor = 90*np.ones(dist.shape)
 
-        # print(mul_factor.shape, dist.shape)
         wheredist = np.where(dist<dist_limit)[0]
         mul_factor[wheredist] = dist[wheredist] / dist_limit * 90
         minus = np.where(self.action<0)[0]
         plus = np.where(self.action>=0)[0]
         dheading = np.zeros(action.shape)
-        # print(dheading.shape, minus.shape, mul_factor.shape, action.shape)
         dheading[minus] = (action[minus] - 1) * mul_factor[minus]
         dheading[plus] = np.abs(action[plus]-1) * mul_factor[plus]
-        # print('selfaction', self.action)
-        # print('dheading', dheading)
         action[minus] = -1*action[minus]
         qdr = state[0][:,:,3].transpose()
-        # print('qdr', qdr)
         heading =  qdr + dheading
 
         return heading.ravel()[0:n_aircraft]
@@ -713,15 +717,14 @@ class Agent:
         self.mask = self.get_mask() # self.mask = np.array([[[1,1,1,0,0,0,0,0,0,0,0,0]]])
         self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size)), self.mask])
         self.action = self.actor.predict([np.reshape(state, (1, traf.ntraf, self.state_size))])
-        # print('mask', self.mask)
-        # print(self.action[0,0,:])
+
         action = np.zeros((traf.ntraf, 1))
         for i in range(traf.ntraf):
             action[i] = np.random.choice(a=np.arange(self.action_size), p=self.action[0,i,:])
 
         wp_ind = action % self.wp_action_size
         spd_ind = np.floor(action / self.wp_action_size).astype(int)
-        # print('spd_ind', spd_ind)
+
         speed_actions = [self.speed_values[i[0]] for i in spd_ind]
 
         # Produce action command
