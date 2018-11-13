@@ -60,10 +60,8 @@ def init_plugin():
     env = Environment(CONF.state_size, CONF.scenario, CONF.shared_state_size)
     # routes = dict()
 
-    # TODO: Read config from config file so no commits have to be made with configurtation changes like scenario calling.
     # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
     # TODO: Every x iterations a test episode must be run to see how far the exploration has come so far
-    # TODO: Find bug in reward generation
     # TODO: Check that cumulative reward update
     # TODO: Find system performance indicator
     # TODO: Implement minimum wake separation
@@ -434,12 +432,10 @@ class Agent:
         self.actor_learning_rate = actor_lr
         self.loss = 0
         self.cumreward=0
-        # TODO: Expand exploration noise to max_aircraft
-        self.OU = OrnsteinUhlenbeckActionNoise(np.array([0]), sigma=sigma, theta=theta, dt=dt)
         self.memory_size = memory_size
         self.max_agents = max_agents
+        self.OU = OrnsteinUhlenbeckActionNoise(np.zeros(self.max_agents), sigma=sigma, theta=theta, dt=dt)
 
-        # TODO: Move these to config file
         self.load_dir = load_dir
         self.load_ep  = str(load_ep).zfill(5)
 
@@ -652,6 +648,7 @@ class Agent:
 
     def act_continuous(self, state):
         n_aircraft = int(np.prod(state[0].shape)/self.state_size)
+        print('n_aircraft', n_aircraft, state[0].shape)
         if n_aircraft==0:
             return
 
@@ -659,7 +656,8 @@ class Agent:
         state[1] = self.pad_nines(state[1], self.max_agents).reshape((1, self.max_agents, self.max_agents-1, self.shared_obs_size))
         self.action = self.actor.predict(state)
 
-        noise = self.OU()
+        noise = self.OU().reshape(self.action.shape)
+        print('noise', noise.shape)
 
         if self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
@@ -675,8 +673,9 @@ class Agent:
         action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
 
 
-        dist_limit = 5 #nm
-        dist = state[0][:,:, 4] #.transpose()
+        dist_limit = 5 # nm
+        dist = state[0][:,:, 4] # .transpose()
+        print('dist', dist.shape, action.shape)
         dist = dist.reshape(action.shape)
         mul_factor = 90*np.ones(dist.shape)
 
