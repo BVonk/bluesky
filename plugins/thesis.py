@@ -19,13 +19,7 @@ from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
 from plugins.ml.OU import OrnsteinUhlenbeckActionNoise
 from plugins.help_functions import detect_los
-
-
-
-
-
 from plugins.vierd import ETA
-
 import pickle
 import random
 import numpy as np
@@ -65,14 +59,13 @@ def init_plugin():
     # routes = dict()
 
     # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
-    # TODO: Every x iterations a test episode must be run to see how far the exploration has come so far for tensorboard cumulative reward
     # TODO: Find system performance indicator
     # TODO: Implement minimum wake separation
-    # TODO: Set destination for every aircraft (FAF)
+    # TODO: Set destination for every aircraft (FAF) for designated runway
     # TODO: Use BlueSKy logging / plotting
     # TODO: Fix circling target problem, this problem occurs at higher speeds
-    # TODO: Los_pairs must be fixed 2D, not 3D
     # TODO: Normalize states to input size where possible. eg. Take lat lon in FIR to normalize.
+    # TODO: Draw EHAM FIR
 
     config = {
         # The name of your plugin
@@ -303,7 +296,7 @@ class Environment:
         lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
         qdr, dist = qdrdist_matrix(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
         qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
-        obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist]).transpose()
+        obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist, traf.cas]).transpose()
 
         return obs
 
@@ -360,6 +353,16 @@ class Environment:
     def action_command(self, action):
         for i in range(len(self.idx)):
             stack.stack('HDG {} {}'.format(self.idx[i], action[i]))
+
+        if len(self.idx)!=0:
+            dist = self.observation[0][:, :, 4]
+            dist_lim = 10
+            dist_idx = np.where(np.abs(dist-dist_lim/2)<dist_lim/2)[1]
+
+
+            for idx in dist_idx:
+                stack.stack('SPD {} 200'.format(self.idx[idx]))
+
 
     def check_collision(self):
         if len(self.los_pairs)!=0:
