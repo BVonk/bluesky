@@ -11,6 +11,7 @@ from bluesky import stack, sim, traf, navdb  #, settings, navdb, traf, sim, scr,
 from bluesky.tools.geo import kwikdist, qdrpos, qdrdist, qdrdist_matrix
 from bluesky.tools.misc import degto180
 from bluesky.tools.aero import nm, g0
+import bluesky.settings as CONF
 
 from plugins.ml.actor import ActorNetwork, ActorNetwork_shared_obs
 from plugins.ml.critic import CriticNetwork, CriticNetwork_shared_obs
@@ -18,7 +19,7 @@ from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
 from plugins.ml.OU import OrnsteinUhlenbeckActionNoise
 from plugins.help_functions import detect_los
-import bluesky as bs
+
 
 
 
@@ -42,7 +43,7 @@ import tensorflow as tf
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
-    global env, agent, update_interval, routes, log_dir
+    global env, agent, update_interval, routes, log_dir, CONF
 
     # Create logging folder
     log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
@@ -52,14 +53,12 @@ def init_plugin():
         os.makedirs(log_dir+'test/')
 
     # config
-    state_size = 5
-    action_size = 1
-    update_interval = 10
-    training = True
-    scenario = 'out.scn'
-    agent = Agent(state_size, action_size, training)
-    env = Environment(state_size, scenario)
-    routes = dict()
+    agent = Agent(CONF.state_size, CONF.shared_state_size, CONF.action_size, CONF.tau, CONF.gamma, CONF.critic_lr,
+                  CONF.actor_lr, CONF.memory_size, CONF.max_agents, CONF.batch_size, CONF.train_bool, CONF.test_dir,
+                  CONF.load_ep, CONF.sigma_OU, CONF.theta_OU, CONF.dt_OU)
+
+    env = Environment(CONF.state_size, CONF.scenario, CONF.shared_state_size)
+    # routes = dict()
 
     # TODO: Read config from config file so no commits have to be made with configurtation changes like scenario calling.
     # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
@@ -70,8 +69,8 @@ def init_plugin():
     # TODO: Implement minimum wake separation
     # TODO: Set destination for every aircraft (FAF)
     # TODO: Use BlueSKy logging / plotting
-    # TODO: Fix circling target problem
-    # CONFIG = read_config()
+    # TODO: Fix circling target problem, this problem occurs at higher speeds
+
 
     config = {
         # The name of your plugin
@@ -83,7 +82,7 @@ def init_plugin():
         # Update interval in seconds. By default, your plugin's update function(s)
         # are called every timestep of the simulation. If your plugin needs less
         # frequent updates provide an update interval.
-        'update_interval': update_interval,
+        'update_interval': CONF.update_interval,
 
         # The update function is called after traffic is updated. Use this if you
         # want to do things as a result of what happens in traffic. If you need to
@@ -148,8 +147,8 @@ def init():
 
 
 def preupdate():
-    # print('stack {} '.format(len(stack.get_scendata()[0])))
-    if sim.simt < update_interval*1.5:
+    # print('settings {}'.format(CONF.conf))
+    if sim.simt < CONF.update_interval*1.5:
         new_state = env.init()
 
 
@@ -211,10 +210,10 @@ def norm(data, axis=0):
 
 
 class Environment:
-    def __init__(self, state_size, scenario):
+    def __init__(self, state_size, scenario,  shared_state_size=0):
         self.n_aircraft = traf.ntraf
         self.state_size = state_size
-        self.shared_state_size = 6
+        self.shared_state_size = shared_state_size
         self.ac_dict = {}
         self.prev_traf = 0
         self.observation = np.zeros((1,self.state_size))
@@ -422,32 +421,32 @@ class Environment:
 
 
 class Agent:
-    def __init__(self, state_size, action_size, training):
+    def __init__(self, state_size, shared_state_size, action_size, tau=0.9, gamma=0.99, critic_lr=0.001, actor_lr=0.001, memory_size=10000, max_agents=10, batch_size = 32, training=True, load_dir='', load_ep=0, sigma=0.15, theta=.5, dt=0.1):
         # Config parameters
         self.train_indicator = training
         self.action_size = action_size
         self.state_size = state_size
-        self.shared_obs_size = 6
-        self.batch_size = 32
-        self.tau = 0.9
-        self.gamma = 0.99
-        self.critic_learning_rate = 0.001
-        self.actor_learning_rate = 0.001
+        self.shared_obs_size = shared_state_size
+        self.batch_size = batch_size
+        self.tau = tau
+        self.gamma = gamma
+        self.critic_learning_rate = critic_lr
+        self.actor_learning_rate = actor_lr
         self.loss = 0
         self.cumreward=0
-        self.max_agents = None
-        self.OU = OrnsteinUhlenbeckActionNoise(np.array([0]), sigma=0.15, theta=.5, dt=0.1)
-        self.memory_size = 10000
-        self.max_agents = 10
+        # TODO: Expand exploration noise to max_aircraft
+        self.OU = OrnsteinUhlenbeckActionNoise(np.array([0]), sigma=sigma, theta=theta, dt=dt)
+        self.memory_size = memory_size
+        self.max_agents = max_agents
 
         # TODO: Move these to config file
-        self.load_dir = 'output/20181024_122347/'
-        self.load_ep  = '02500'
+        self.load_dir = load_dir
+        self.load_ep  = str(load_ep).zfill(5)
 
         self.ac_dict = {}
-        self.speed_values = [175, 200, 225, 250]
-        self.wp_action_size = 3
-        self.spd_action_size = len(self.speed_values)
+        # self.speed_values = [175, 200, 225, 250]
+        # self.wp_action_size = 3
+        # self.spd_action_size = len(self.speed_values)
 
         #self.wp_action_size * self.spd_action_size
 
