@@ -18,7 +18,7 @@ from plugins.ml.critic import CriticNetwork, CriticNetwork_shared_obs
 from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
 from plugins.ml.OU import OrnsteinUhlenbeckActionNoise
-from plugins.help_functions import detect_los
+from plugins.help_functions import detect_los, normalize
 from plugins.vierd import ETA
 import pickle
 import random
@@ -60,12 +60,11 @@ def init_plugin():
 
     # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
     # TODO: Find system performance indicator
-    # TODO: Implement minimum wake separation
+    # TODO: Implement minimum wake separation, minimum wake separation is defined from trailing experiments
     # TODO: Set destination for every aircraft (FAF) for designated runway
     # TODO: Use BlueSKy logging / plotting
-    # TODO: Fix circling target problem, this problem occurs at higher speeds
-    # TODO: Normalize states to input size where possible. eg. Take lat lon in FIR to normalize.
-    # TODO: Draw EHAM FIR
+    # TODO: Fix circling target problem, this problem occurs at higher speeds, currently solved by reducing speed to 200 m/s near the runway. Second option is adding speed changes (instantaneous?)
+    # TODO: Draw EHAM FIR (Nice to have)
 
     config = {
         # The name of your plugin
@@ -220,6 +219,7 @@ class Environment:
         self.scn = scenario
         self.idx = []
         self.los_pairs = []
+        self.dist_scale = 110
 
         for id in traf.id:
             self.ac_dict[id]= [0,0,0]
@@ -293,11 +293,20 @@ class Environment:
     def generate_observation_continuous(self):
         """ Generate observation of size N_aircraft x state_size"""
         destidx = navdb.getaptidx('EHAM')
+
+        minlat, maxlat = 50.75428888888889, 55.
+        minlon, maxlon = 2., 7.216944444444445
+
         lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
         qdr, dist = qdrdist_matrix(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
         qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
         obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist, traf.cas]).transpose()
-
+        obs = np.array([normalize(traf.lat, minlat, maxlat),
+                        normalize(traf.lon, minlon, maxlon),
+                        normalize(traf.hdg, 0, 360),
+                        normalize(qdr+180, 0, 360),
+                        normalize(dist, 0, self.dist_scale),
+                        normalize(traf.cas, 80, 200)]).transpose()
         return obs
 
     def generate_shared_observation(self):
@@ -307,19 +316,20 @@ class Environment:
 
         The observation are Ntraf sequences of size (Ntraf - 1 , x)
         """
-
+        minlat, maxlat = 50.75428888888889, 55.
+        minlon, maxlon = 2., 7.216944444444445
         # Generate distance matrix
         dist, qdr = qdrdist_matrix(np.mat(traf.lat), np.mat(traf.lon), np.mat(traf.lat), np.mat(traf.lon))
         dist, qdr = np.array(dist), np.array(qdr)
         shared_obs = np.zeros((traf.ntraf, traf.ntraf - 1, self.shared_state_size))
         for i in range(traf.ntraf):
             # shared_obs = np.zeros((traf.ntraf - 1, self.shared_state_size))
-            shared_obs[i, :, 0] = np.delete(dist[i,:], i, 0)
-            shared_obs[i, :, 1] = np.delete(qdr[i,:]/180., i, 0)  # divide by 180
-            shared_obs[i, :, 2] = np.delete(traf.lat, i)
-            shared_obs[i, :, 3] = np.delete(traf.lon, i)
-            shared_obs[i, :, 4] = np.delete(traf.hdg/180., i)     # divide by 180
-            shared_obs[i, :, 5] = np.delete(traf.cas, i)
+            shared_obs[i, :, 0] = np.delete(normalize(dist[i,:], 0, 200), i, 0)
+            shared_obs[i, :, 1] = np.delete(normalize(qdr[i,:]+180, 0, 360), i, 0)  # divide by 180
+            shared_obs[i, :, 2] = np.delete(normalize(traf.lat, minlat, maxlat), i)
+            shared_obs[i, :, 3] = np.delete(normalize(traf.lon, minlon, maxlon), i)
+            shared_obs[i, :, 4] = np.delete(traf.hdg/360., i)     # divide by 180
+            shared_obs[i, :, 5] = np.delete(normalize(traf.cas, 75, 200), i)
         return shared_obs
 
 
@@ -355,7 +365,7 @@ class Environment:
             stack.stack('HDG {} {}'.format(self.idx[i], action[i]))
 
         if len(self.idx)!=0:
-            dist = self.observation[0][:, :, 4]
+            dist = self.observation[0][:, :, 4]*self.dist_scale
             dist_lim = 10
             dist_idx = np.where(np.abs(dist-dist_lim/2)<dist_lim/2)[1]
 
@@ -688,11 +698,9 @@ class Agent:
         self.action = self.actor.predict(state)
 
         noise = self.OU().reshape(self.action.shape)
-
-        if self.train_indicator:
+        if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
-            if not self.summary_counter%CONF.test_freq==0:
-                self.action = self.action + noise
+            self.action = self.action + noise
             self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
             self.action = np.minimum(np.ones(self.action.shape), self.action)
 
@@ -702,21 +710,20 @@ class Agent:
         y_offset = 0.107982 + 6.69737e-08
         action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
 
-
         dist_limit = 5 # nm
-        dist = state[0][:,:, 4] # .transpose()
+        dist = state[0][:,:, 4] * 110
         dist = dist.reshape(action.shape)
         mul_factor = 90*np.ones(dist.shape)
 
         wheredist = np.where(dist<dist_limit)[0]
         mul_factor[wheredist] = dist[wheredist] / dist_limit * 90
-        minus = np.where(self.action<0)[0]
-        plus = np.where(self.action>=0)[0]
+        minus = np.where(self.action.reshape(self.action.shape[1])<0)[0]
+        plus = np.where(self.action.reshape(self.action.shape[1])>=0)[0]
         dheading = np.zeros(action.shape)
         dheading[minus] = (action[minus] - 1) * mul_factor[minus]
         dheading[plus] = np.abs(action[plus]-1) * mul_factor[plus]
         action[minus] = -1*action[minus]
-        qdr = state[0][:,:,3].transpose()
+        qdr = state[0][:,:,3].transpose()*360-180 # Denormalize
         heading =  qdr + dheading
 
         return heading.ravel()[0:n_aircraft]
@@ -787,6 +794,12 @@ class Agent:
             self.write_test_summaries(self.cum_reward)
         else:
             self.write_train_summaries(self.cum_reward)
+        print("Episode {}, Score {}".format(self.summary_counter, self.cum_reward))
+        if self.summary_counter % CONF.test_freq == 0:
+            print("Starting test run at Episode {}".format(self.summary_counter))
+        else:
+            print("Start training Episode {}".format(self.summary_counter))
+
         self.cum_reward = 0
         # self.ac_dict={}
 

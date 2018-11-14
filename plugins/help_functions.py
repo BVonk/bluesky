@@ -62,4 +62,9 @@ def abc_formula(a, b, c):
     x1 =( -b - D**0.5 )/ (2*a)
     x2 =( -b + D**0.5 )/ (2*a)
     x = x1*x1>0 + x2*x2>0
+
+def normalize(x, low, high):
+    y = (x-low) / (high-low)
+    return y
+
     return x
