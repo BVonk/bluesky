@@ -18,7 +18,7 @@ from plugins.ml.critic import CriticNetwork, CriticNetwork_shared_obs
 from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
 from plugins.ml.OU import OrnsteinUhlenbeckActionNoise
-from plugins.help_functions import detect_los, normalize
+from plugins.help_functions import detect_los, normalize, print_intermediate_layer_output
 from plugins.vierd import ETA
 import pickle
 import random
@@ -64,7 +64,7 @@ def init_plugin():
     # TODO: Set destination for every aircraft (FAF) for designated runway
     # TODO: Use BlueSKy logging / plotting
     # TODO: Fix circling target problem, this problem occurs at higher speeds, currently solved by reducing speed to 200 m/s near the runway. Second option is adding speed changes (instantaneous?)
-    # TODO: Draw EHAM FIR (Nice to have)
+    # TODO: Check all intermediate layers of the critic jwz.
 
     config = {
         # The name of your plugin
@@ -239,6 +239,7 @@ class Environment:
         self.los_pairs = detect_los(traf, traf, traf.asas.R, 9999999)
         self.check_reached()
         self.generate_reward()
+        print('rew', self.reward)
         done = True if self.done.all() == True else False
 
         done_idx = np.where(self.done == True)[0]
@@ -330,6 +331,7 @@ class Environment:
             shared_obs[i, :, 3] = np.delete(normalize(traf.lon, minlon, maxlon), i)
             shared_obs[i, :, 4] = np.delete(traf.hdg/360., i)     # divide by 180
             shared_obs[i, :, 5] = np.delete(normalize(traf.cas, 75, 200), i)
+        print('shard_obs', shared_obs.shape)
         return shared_obs
 
 
@@ -400,7 +402,6 @@ class Environment:
         done = np.zeros((traf.ntraf), dtype=bool)
         done[reached] = True
         self.done = done
-
 
     def generate_commands(self):
         pass
@@ -527,14 +528,17 @@ class Agent:
 
     def pad_nines(self, array, max_timesteps):
         """Pad -999 for shared observations sequences"""
+        print("array shape", array.shape)
         zeros = -999.0 * np.ones((max_timesteps, max_timesteps - 1, array.shape[-1]))
         if len(array.shape)==4:
             array=array.reshape((array.shape[1:]))
         zeros[0:array.shape[0], 0:array.shape[1], :] = array
-        return zeros
+        return zeros.reshape(array.shape[0] * array.shape[1], array.shape[2])
 
     def build_summaries(self):
-        episode_reward = tf.Variable(0.)
+        episode_reward = tf.Variable(0., name="Episode_reward")
+        # loss = tf.Variable(0., name="critic_loss")
+        # tf.summary.scalar("Critic_loss", loss)
         tf.summary.scalar("Reward", episode_reward)
         summary_vars = [episode_reward]# , episode_ave_max_q]
         summary_ops = tf.summary.merge_all()
@@ -581,13 +585,19 @@ class Agent:
         if self.train_indicator:
             # TODO: Check that the gradient calculator ignores the zero input sequences.
             batch = self.replay_memory.getBatch(self.batch_size)
-
+            # print("batch", batch)
+            # np.save("batch_array", batch)
             # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
             # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
             # calculations
-            # sequence_length = [seq[0].shape[0] for seq in batch]
-            # max_t = max(sequence_length)
             max_t = self.max_agents
+            max_t = []
+            for i in range(self.batch_size):
+                max_t.append(batch[i][1].shape[0])
+
+            max_t = max(max_t)
+            print('max_t', max_t)
+
             if type(batch[0][0])==list:
                 # states = [[self.pad_zeros(seq[0][0], max_t), self.pad_nines(seq[0][1], max_t)] for seq in batch]
                 states = [ np.asarray([self.pad_zeros(seq[0][0], max_t) for seq in batch]) ]
@@ -604,6 +614,8 @@ class Agent:
             rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
             dones = np.asarray([seq[4] for seq in batch])
 
+            print(new_states[0].shape, new_states[1].shape)
+            print('action', actions.shape, new_states[0].shape)
             # target_q_values = self.critic.target_model.predict(new_states, self.actor.target_model.predict(new_states))
             target_q_values = self.critic.target_model.predict([new_states[0], new_states[1], self.actor.target_model.predict(new_states)])
             y_t = target_q_values.copy()
@@ -614,17 +626,27 @@ class Agent:
                 else:
                     y_t[k] = rewards[k].reshape((max_t, 1)) + self.gamma * target_q_values[k]
 
+            prediction = self.critic.model.predict([states[0], states[1], actions])
 
+            # print('pred', prediction.shape, prediction)
+            # print('y_t', y_t.shape, y_t)
+
+
+
+            loss = self.critic.train(states, actions, y_t)
             actions_for_grad = self.actor.model.predict(states)
             grads = self.critic.gradients(states, actions_for_grad)
-            self.critic.train(states, actions, y_t)
+            # Mask gradients?
+            # print('grads', len(grads[0]), grads[0])
+            loss = self.critic.train(states, actions, y_t)
             self.actor.train(states, grads)
             self.actor.update_target_network()
             self.critic.update_target_network()
 
 
     def update_replay_memory(self, state, reward, done, new_state):
-        self.replay_memory.add(state, self.action.reshape(self.max_agents, self.action_size), reward, new_state, done)
+        print('state_shape', state[1].shape)
+        self.replay_memory.add(state, self.action.reshape(self.action.shape[1], self.action_size), reward, new_state, done)
 
 
     def __update_aircraft_waypoints(self):
@@ -689,27 +711,80 @@ class Agent:
 
 
     def act_continuous(self, state):
+        # No action should be taken if there are no aircraft, otherwise the program crashes.
         n_aircraft = int(np.prod(state[0].shape)/self.state_size)
         if n_aircraft==0:
             return
 
-        state[0] = self.pad_zeros(state[0], self.max_agents).reshape((1, self.max_agents, self.state_size))
-        state[1] = self.pad_nines(state[1], self.max_agents).reshape((1, self.max_agents, self.max_agents-1, self.shared_obs_size))
-        self.action = self.actor.predict(state)
+        # state[0] = state[0].reshape(1, state[0].shape[0], state[0].shape[1])
+        # state[0] = self.pad_zeros(state[0], self.max_agents).reshape((1, self.max_agents, self.state_size))
+        # state[1] = self.pad_nines(state[1], self.max_agents).reshape((1, self.max_agents, self.max_agents-1, self.shared_obs_size))
+        state_copy = state.copy()
+        state_copy[0] = state[0].reshape(1, state[0].shape[0], state[0].shape[1])
+        state_copy[1] = state[1].reshape(1, n_aircraft*(n_aircraft-1), state[1].shape[-1])
+        self.action = self.actor.predict(state_copy)
 
-        noise = self.OU().reshape(self.action.shape)
+        state[0] = state[0].reshape(1, state[0].shape[0], state[0].shape[1])
+
+        # data = state
+        # model = self.target.model
+        # print_intermediate_layer_output(model, data, 'merged_mask')
+        # print_intermediate_layer_output(model, data, 'pre_brnn')
+        # print_intermediate_layer_output(model, data, 'brnn')
+        # print_intermediate_layer_output(model, data, 'post_brnn')
+
+
+        # data = [state[0], state[1], self.action]
+        # model = self.critic.model
+        # print_intermediate_layer_output(model, data, 'input_actions')
+        # print_intermediate_layer_output(model, data, 'max_pool')
+        # print_intermediate_layer_output(model, data, 'concatenate_inputs')
+        # print_intermediate_layer_output(model, data, 'input_mask')
+        # print_intermediate_layer_output(model, data, 'pre_brnn')
+        # print_intermediate_layer_output(model, data, 'brnn')
+        # print_intermediate_layer_output(model, data, 'post_brnn')
+
+        # Exploration noise is added only when no test episode is running
+        print(self.OU())
+        noise = self.OU()[0:n_aircraft].reshape(self.action.shape)
+
         if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
             self.action = self.action + noise
             self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
             self.action = np.minimum(np.ones(self.action.shape), self.action)
 
+        # Keras masked inputs do not output 0, but rather output the previous output without modifying it. This gives
+        # issues when using the action outputs as inputs for the critic and trying to mask it. The nonzero masked output
+        # from the actor therefore is not probably masked in the critic due to the nonzero values. Therefore the masked
+        # actor output is manually reset to 0 here. It is better to use tensorflow for masked output in recurrent
+        # networks, because Tensorflow does output 0 for masked inputs.
+        self.action[:, n_aircraft: , :] = 0
+
+        # data = state
+        # model = self.target.model
+        # print_intermediate_layer_output(model, data, 'merged_mask')
+        # print_intermediate_layer_output(model, data, 'pre_brnn')
+        # print_intermediate_layer_output(model, data, 'brnn')
+        # print_intermediate_layer_output(model, data, 'post_brnn')
+
+
+        # data = [state[0], state[1], self.action]
+        # model = self.critic.model
+        # print_intermediate_layer_output(model, data, 'input_actions')
+        # print_intermediate_layer_output(model, data, 'max_pool')
+        # print_intermediate_layer_output(model, data, 'concatenate_inputs')
+        # print_intermediate_layer_output(model, data, 'input_mask')
+        # print_intermediate_layer_output(model, data, 'pre_brnn')
+        # print_intermediate_layer_output(model, data, 'brnn')
+        # print_intermediate_layer_output(model, data, 'post_brnn')
+
+
         # Apply Bell curve here to sample from to get action values
         mu = 0
         sigma = 0.5
         y_offset = 0.107982 + 6.69737e-08
         action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
-
         dist_limit = 5 # nm
         dist = state[0][:,:, 4] * 110
         dist = dist.reshape(action.shape)
@@ -723,9 +798,11 @@ class Agent:
         dheading[minus] = (action[minus] - 1) * mul_factor[minus]
         dheading[plus] = np.abs(action[plus]-1) * mul_factor[plus]
         action[minus] = -1*action[minus]
-        qdr = state[0][:,:,3].transpose()*360-180 # Denormalize
-        heading =  qdr + dheading
 
+        qdr = state[0][:,:,3].transpose()*360-180 # Denormalize
+        dheading = self.action[0] * mul_factor
+        heading =  qdr + dheading
+        # print(self.action[0].ravel())
         return heading.ravel()[0:n_aircraft]
 
 
@@ -753,10 +830,6 @@ class Agent:
         spd_ind = np.floor(action / self.wp_action_size).astype(int)
 
         speed_actions = [self.speed_values[i[0]] for i in spd_ind]
-
-        # Produce action command
-        # Get the number of segments in main route index and construct
-        maxsegments = 4
 
         # Action is already selected. Just generate the commands ;)
 
@@ -796,9 +869,9 @@ class Agent:
             self.write_train_summaries(self.cum_reward)
         print("Episode {}, Score {}".format(self.summary_counter, self.cum_reward))
         if self.summary_counter % CONF.test_freq == 0:
-            print("Starting test run at Episode {}".format(self.summary_counter))
-        else:
-            print("Start training Episode {}".format(self.summary_counter))
+            print("Starting test run at Episode {}".format(self.summary_counter+1))
+        # else:
+            # print("Start training Episode {}".format(self.summary_counter))
 
         self.cum_reward = 0
         # self.ac_dict={}

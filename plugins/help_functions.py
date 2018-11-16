@@ -2,6 +2,7 @@ from bluesky import traf  #, settings, navdb, traf, sim, scr, tools
 from bluesky.tools import geo
 from bluesky.tools.aero import nm
 import numpy as np
+from keras import Model
 
 
 def detect_los(ownship, intruder, RPZ, HPZ):
@@ -64,7 +65,25 @@ def abc_formula(a, b, c):
     x = x1*x1>0 + x2*x2>0
 
 def normalize(x, low, high):
+    """
+    Normalizes the input to a zero mean
+    :param x:
+    :param low:
+    :param high:
+    :return:
+    """
     y = (x-low) / (high-low)
     return y
 
-    return x
+def print_intermediate_layer_output(model, data, layer_name):
+    """
+    Prints the output and shape of intermediate model layers for debugging help.
+    :param model: Keras model
+    :param data: Input data for model
+    :param layer_name: Name of layer for which output should be printed
+    :return: None
+    """
+    intermediate_layer_model = Model(inputs=model.input,
+                                     outputs=model.get_layer(layer_name).output)
+    intermediate_output = intermediate_layer_model.predict(data)[0]
+    print(layer_name, intermediate_output.shape, intermediate_output)

@@ -13,7 +13,7 @@ class BiCNet:
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
 
         h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
-        h2 = TimeDistributed(Dense(act_dim, activation='tanh'), name='post_brnn')(h1)
+        h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
         # out1 = TimeDistributed(Dense(act_dim, activation='linear', name=name+'_actionoutput'))(h1)
         # out2 = TimeDistributed(Dense(act_dim, activation='linear', name=name+'_speedoutput'))(h1)
         h3c = Activation('tanh', name='tanh')(h2)
@@ -45,41 +45,47 @@ class BiCNet:
                             layer_name = weight.name.split('/')[-1]
                             tf.summary.histogram(layer_name, weight)
 
-            return model, model.trainable_weights, out, S
+            return model, model.trainable_weights, model.output, S
 
     @staticmethod
     def build_actor_shared_obs(max_agents, local_obs_dim, shared_obs_dim, act_dim, H1, H2, name):
+        max_agents = None
         S1 = Input(shape=(max_agents, local_obs_dim), name='local_input_states')
-        S2 = Input(shape=(max_agents, max_agents-1, shared_obs_dim), name='shared_input_states')
+        S2 = Input(shape=(max_agents, shared_obs_dim), name='shared_input_states')
 
         # Pre-process S2
 
-        reshaped = Reshape([S2.shape[1].value * S2.shape[2].value, S2.shape[3].value], name="shared_reshape")(S2)
-        mask = Masking(mask_value=-999., name = 'shared_mask')(reshaped)
+        # reshaped = Reshape([S2.shape[1].value * S2.shape[2].value, S2.shape[3].value], name="shared_reshape")(S2)
+        # reshaped = Reshape([tf.shape(S2)[1] * tf.shape(S2)[2], S2.shape[3].value], name="shared_reshape")(S2)
+        # reshaped = Lambda(reshape_input, name="shared_reshape")(S2)
+        mask = Masking(mask_value=-999., name = 'shared_mask')(S2)
         layer1 = TimeDistributed(Dense(12, activation='relu'), name='shared_TD1')(mask)
         layer2 = TimeDistributed(Dense(12, activation='linear'), name='shared_TD2')(layer1)
         layer3 = Lambda(remove_mask, name='remove_mask')(layer2)
-        layer4 = Reshape((S2.shape[1].value, S2.shape[2].value, layer3.shape[2].value), name='post_reshapse')(layer3)
-        layer5 = Lambda(max_pool_sequence, name='max_pool')(layer4)
+        # layer4 = Reshape((S2.shape[1].value, S2.shape[2].value, layer3.shape[2].value), name='reshape')(layer3)
+        layer5 = Lambda(max_pool_sequence, name='max_pool')(layer3)
         S2_preprocessed = layer5
         # Merge S1, S2
-        M = Concatenate(axis=-1, name='Merge_local_shared')([S1, S2_preprocessed])
+
+        S1_preprocessed = Lambda(remove_zeros, name='remove_zeros')(S1)
+        M = Concatenate(axis=-1, name='Merge_local_shared')([S1_preprocessed, S2_preprocessed])
         mask = Masking(mask_value=0., name = 'merged_mask')(M)
+        print("Hallo kunnen jullie mij horen!", S1_preprocessed.shape, S2_preprocessed.shape)
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
-        h2 = TimeDistributed(Dense(act_dim, activation='tanh'), name='post_brnn')(h1)
+        h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
         h3c = Activation('tanh', name='tanh')(h2)
         out = h3c
         model = Model(inputs=[S1, S2], outputs=out)
         layers = model.layers
-        with tf.name_scope(name):
-            for layer in layers:
-                with tf.name_scope(layer.name):
-                    for weight in layer.weights:
-                        layer_name = weight.name.split('/')[-1]
-                        tf.summary.histogram(layer_name, weight)
+        # with tf.name_scope(name):
+        #     for layer in layers:
+        #         with tf.name_scope(layer.name):
+        #             for weight in layer.weights:
+        #                 layer_name = weight.name.split('/')[-1]
+        #                 tf.summary.histogram(layer_name, weight)
 
-        return model, model.trainable_weights, out, S1, S2
+        return model, model.trainable_weights, model.output, S1, S2
 
 
 
@@ -104,30 +110,36 @@ class BiCNet:
                     for weight in layer.weights:
                         layer_name = weight.name.split('/')[-1]
                         tf.summary.histogram(layer_name, weight)
-        return model, out, A, S
+        return model, model.output, A, S
 
     @staticmethod
     def build_critic_shared_obs(max_agents, obs_dim, shared_obs_dim, act_dim, H1, H2, LR, name):
         # Define inputs
+        max_agents = None
         S1 = Input(shape=(max_agents, obs_dim), name='local_input_states')
-        S2 = Input(shape=(max_agents, max_agents-1, shared_obs_dim), name='shared_input_states')
+        S2 = Input(shape=(max_agents, shared_obs_dim), name='shared_input_states')
         A = Input(shape=(max_agents, act_dim), name='input_actions')
 
         # Pre-process S2
         # Set the masking value to ignore 0 padded sequence inputs.
-        reshaped = Reshape([S2.shape[1].value * S2.shape[2].value, S2.shape[3].value], name="shared_reshape")(S2)
-        mask = Masking(mask_value=-999., name = 'shared_mask')(reshaped)
+        # reshaped = Reshape([S2.shape[1].value * S2.shape[2].value, S2.shape[3].value], name="shared_reshape")(S2)
+        # reshaped = Reshape([tf.shape(S2)[1] * tf.shape(S2)[2], S2.shape[3].value], name="shared_reshape")(S2)
+        # reshaped = Lambda(reshape_input, name="shared_reshape")(S2)
+        mask = Masking(mask_value=-999., name = 'shared_mask')(S2)
         layer1 = TimeDistributed(Dense(12, activation='relu'), name='shared_TD1')(mask)
         layer2 = TimeDistributed(Dense(12, activation='linear'), name='shared_TD2')(layer1)
         layer3 = Lambda(remove_mask, name='remove_mask')(layer2)
-        layer4 = Reshape((S2.shape[1].value, S2.shape[2].value, layer3.shape[2].value), name='post_reshapse')(layer3)
-        layer5 = Lambda(max_pool_sequence, name='max_pool')(layer4)
+        # layer4 = Reshape((S2.shape[1].value, S2.shape[2].value, layer3.shape[2].value), name='post_reshape')(layer3)
+        layer5 = Lambda(max_pool_sequence, name='max_pool')(layer3)
         S2_preprocessed = layer5
 
+        A_preprocessed = Lambda(remove_zeros, name='remove_zeros_A')(A)
+        S1_preprocessed = Lambda(remove_zeros, name='remove_zeros_S1')(S1)
+
         # Merge inputs
-        M = Concatenate()([S1, S2_preprocessed, A])
+        M = Concatenate(name='concatenate_inputs')([S1_preprocessed, S2_preprocessed, A_preprocessed])
         # Set the masking value to ignore 0 padded sequence inputs.
-        mask = Masking(mask_value=0.)(M)
+        mask = Masking(mask_value=0., name='input_mask')(M)
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
         h2 = TimeDistributed(Dense(1, activation='linear'), name='post_brnn')(h1)
@@ -136,15 +148,15 @@ class BiCNet:
         adam = Adam(lr=LR)
         model.compile(loss='mse', optimizer=adam)
         layers = model.layers
-        with tf.name_scope(name):
-            for layer in layers:
-                with tf.name_scope(layer.name):
-                    for weight in layer.weights:
-                        layer_name = weight.name.split('/')[-1]
-                        tf.summary.histogram(layer_name, weight)
+        # with tf.name_scope(name):
+        #     for layer in layers:
+        #         with tf.name_scope(layer.name):
+        #             for weight in layer.weights:
+        #                 layer_name = weight.name.split('/')[-1]
+        #                 tf.summary.histogram(layer_name, weight)
 
 
-        return model, out, A, S1, S2
+        return model, model.output, A, S1, S2
 
 def renormalized_mask_after_softmax(x):
     scale_factor = tf.divide(tf.constant(1, tf.float32), tf.reduce_sum(x))
@@ -153,8 +165,48 @@ def renormalized_mask_after_softmax(x):
 
 
 def max_pool_sequence(x):
-    max_pool = tf.reduce_max(x, axis=2, keep_dims=False)
+    """
+
+    :param x Input tensor for max_pool_sequence:
+    :return:
+    """
+    # For the difference between tf.shape(x) and x.shape refer to https://ipt.ai/2018/08/shapeless-variables/
+    # tf.shape(x) returns the dynamic shape, where x.shape returns the static shape at the moment the graph is build
+    zero = tf.constant(0, dtype=tf.float32)
+    where = tf.not_equal(x, zero)
+    x1 = tf.boolean_mask(x, where)
+    shape = tf.shape(x1)[0]
+    one = tf.Variable(1, dtype=tf.float32, trainable=False)
+    minone = tf.constant(-1, dtype=tf.float32)
+    two = tf.constant(2, dtype=tf.float32)
+    four = tf.constant(4, dtype=tf.float32)
+    add = tf.add(one, tf.multiply(four, tf.divide(tf.cast(shape, tf.float32), tf.cast(x.shape[-1], tf.float32))))
+    sqrt = tf.sqrt(add)
+    n_aircraft = tf.divide(tf.add(minone, sqrt), two)
+    print("n_aircraft", n_aircraft)
+    x2 = tf.reshape(x1, [tf.cast(one, tf.int32), tf.cast(tf.add(n_aircraft, one), tf.int32), tf.cast(n_aircraft, tf.int32), x.shape[-1]], name='reshape_x1')
+    max_pool = tf.reduce_max(x2, axis=2, keep_dims=False)
     return max_pool
+
+def remove_zeros(x):
+    batch_size = tf.shape(x)[0]
+    one = tf.Variable(1, dtype=tf.int32, trainable=False)
+    #shape = tf.cast(tf.divide(tf.shape(x)[0],tf.shape(x)[0]), tf.int32)
+    for i in range(tf.shape(x)[0]):
+        print("test")
+    zero = tf.constant(0, dtype=tf.float32)
+    where = tf.not_equal(x, zero)
+    x1 = tf.boolean_mask(x, where)
+    n_aircraft = tf.Variable(1, trainable=False)
+    n_aircraft = tf.cast(tf.divide(tf.cast(tf.divide(tf.shape(x1)[-1], tf.shape(x)[0]), tf.int32), tf.shape(x)[-1]), dtype=tf.int32)
+    # print(sess.run(n_aircraft))
+    x2 = tf.reshape(x1, [tf.shape(x)[0], n_aircraft, x.shape[-1]], name='remove_zeros_reshape')
+    # x2 = tf.reshape(x1, [tf.shape, n_aircraft, x.shape[-1]], name='remove_zeros_reshape')
+    return x2
+
+def reshape_input(x):
+    return tf.reshape(x, [tf.shape(x)[0], tf.shape(x)[1] * tf.shape(x)[2], x.shape[3]], name="shared_reshape")
+
 
 def remove_mask(x):
     return x

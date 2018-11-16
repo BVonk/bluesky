@@ -27,7 +27,8 @@ class CriticNetwork(object):
         })[0]
 
     def train(self, states, actions, y):
-        self.model.train_on_batch([states, actions], y)
+        loss = self.model.train_on_batch([states, actions], y)
+        return loss
 
     def update_target_network(self):
         critic_weights = self.model.get_weights()
@@ -52,7 +53,7 @@ class CriticNetwork_shared_obs(object):
         self.target_shared_states = BiCNet.build_critic_shared_obs(MAX_AIRCRAFT, state_size, shared_state_size, action_size, 32, 32, LEARNING_RATE, 'critic_target')
         self.action_grads = tf.gradients(self.Q_values, self.actions)
         self.sess.run(tf.global_variables_initializer())
-
+        print(self.model.summary())
     def gradients(self, states, actions):
         return self.sess.run(self.action_grads, feed_dict={
             self.states: states[0],
