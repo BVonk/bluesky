@@ -67,10 +67,10 @@ class BiCNet:
         S2_preprocessed = layer5
         # Merge S1, S2
 
-        S1_preprocessed = Lambda(remove_zeros, name='remove_zeros')(S1)
-        M = Concatenate(axis=-1, name='Merge_local_shared')([S1_preprocessed, S2_preprocessed])
+        # S1_preprocessed = Lambda(remove_zeros, name='remove_zeros')(S1)
+        M = Concatenate(axis=-1, name='Merge_local_shared')([S1, S2_preprocessed])
         mask = Masking(mask_value=0., name = 'merged_mask')(M)
-        print("Hallo kunnen jullie mij horen!", S1_preprocessed.shape, S2_preprocessed.shape)
+        # print("Hallo kunnen jullie mij horen!", S1_preprocessed.shape, S2_preprocessed.shape)
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
         h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
@@ -133,11 +133,11 @@ class BiCNet:
         layer5 = Lambda(max_pool_sequence, name='max_pool')(layer3)
         S2_preprocessed = layer5
 
-        A_preprocessed = Lambda(remove_zeros, name='remove_zeros_A')(A)
-        S1_preprocessed = Lambda(remove_zeros, name='remove_zeros_S1')(S1)
+        # A_preprocessed = Lambda(remove_zeros, name='remove_zeros_A')(A)
+        # S1_preprocessed = Lambda(remove_zeros, name='remove_zeros_S1')(S1)
 
         # Merge inputs
-        M = Concatenate(name='concatenate_inputs')([S1_preprocessed, S2_preprocessed, A_preprocessed])
+        M = Concatenate(name='concatenate_inputs')([S1, S2_preprocessed, A])
         # Set the masking value to ignore 0 padded sequence inputs.
         mask = Masking(mask_value=0., name='input_mask')(M)
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
@@ -164,7 +164,7 @@ def renormalized_mask_after_softmax(x):
     return rescaled
 
 
-def max_pool_sequence(x):
+def max_pool_sequence1(x):
     """
 
     :param x Input tensor for max_pool_sequence:
@@ -188,12 +188,54 @@ def max_pool_sequence(x):
     max_pool = tf.reduce_max(x2, axis=2, keep_dims=False)
     return max_pool
 
+
+def max_pool_sequence(x):
+    """
+
+    :param x Input tensor for max_pool_sequence:
+    :return:
+    """
+    # For the difference between tf.shape(x) and x.shape refer to https://ipt.ai/2018/08/shapeless-variables/
+    # tf.shape(x) returns the dynamic shape, where x.shape returns the static shape at the moment the graph is build
+
+    # Compute number of aircraft
+    zero = tf.constant(0, dtype=tf.float32)
+    y = tf.maximum(tf.constant(1, dtype=tf.int32), tf.shape(x)[1])
+    one = tf.Variable(1, dtype=tf.float32, trainable=False)
+    minone = tf.constant(-1, dtype=tf.float32)
+    two = tf.constant(2, dtype=tf.float32)
+    four = tf.constant(4, dtype=tf.float32)
+    add = tf.add(one, tf.multiply(four, tf.cast(y, tf.float32)))
+    sqrt = tf.sqrt(add)
+    n_aircraft = tf.divide(tf.add(minone, sqrt), two)
+
+    # Max pool
+    mask = tf.equal(x, zero)
+    index = tf.where(mask)
+    index.shape[0]
+    shape = tf.shape(x, out_type=tf.int64)
+    # fill = tf.Variable(1000., shape=tf.shape(index)[0])
+    values = tf.fill([tf.shape(index)[0]], -99999.)
+    sparse = tf.sparse.SparseTensor(indices=index, values=values, dense_shape=shape)
+    # sparse = tf.sparse.reorder(sparse)
+    dense = tf.sparse.to_dense(sparse, default_value=0.)
+    x1 = tf.add(x, dense)
+    x2 = tf.reshape(x1, [tf.shape(x)[0],
+                         tf.maximum(tf.constant(1, dtype=tf.int32), tf.cast(tf.add(n_aircraft, one), tf.int32)),
+                         tf.maximum(tf.constant(1, dtype=tf.int32),tf.cast(n_aircraft, tf.int32)),
+                         x.shape[-1]],
+                    name='reshape_x1')
+    max_pool = tf.reduce_max(x2, axis=2, keepdims=False)
+
+    return max_pool
+
+
+tf.maximum
+
 def remove_zeros(x):
     batch_size = tf.shape(x)[0]
     one = tf.Variable(1, dtype=tf.int32, trainable=False)
-    #shape = tf.cast(tf.divide(tf.shape(x)[0],tf.shape(x)[0]), tf.int32)
-    for i in range(tf.shape(x)[0]):
-        print("test")
+    # shape = tf.cast(tf.divide(tf.shape(x)[0],tf.shape(x)[0]), tf.int32)
     zero = tf.constant(0, dtype=tf.float32)
     where = tf.not_equal(x, zero)
     x1 = tf.boolean_mask(x, where)

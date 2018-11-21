@@ -533,7 +533,8 @@ class Agent:
         if len(array.shape)==4:
             array=array.reshape((array.shape[1:]))
         zeros[0:array.shape[0], 0:array.shape[1], :] = array
-        return zeros.reshape(array.shape[0] * array.shape[1], array.shape[2])
+        # print('shapeshape', array.shape)
+        return zeros.reshape(max_timesteps*(max_timesteps-1), array.shape[2])
 
     def build_summaries(self):
         episode_reward = tf.Variable(0., name="Episode_reward")
@@ -594,7 +595,7 @@ class Agent:
             max_t = []
             for i in range(self.batch_size):
                 max_t.append(batch[i][1].shape[0])
-
+            print('max_t', max_t)
             max_t = max(max_t)
             print('max_t', max_t)
 
