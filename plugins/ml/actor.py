@@ -5,7 +5,8 @@ import tensorflow as tf
 import keras.backend as K
 
 class ActorNetwork(object):
-    def __init__(self, sess, state_size, action_size, BATCH_SIZE, TAU, LEARNING_RATE):
+    # def __init__(self, sess, state_size, action_size, BATCH_SIZE, TAU, LEARNING_RATE):
+    def __init__(self, sess, state_size, action_size, max_aircraft, BATCH_SIZE, TAU, LEARNING_RATE):
         self.sess = sess
         self.BATCH_SIZE = BATCH_SIZE
         self.TAU = TAU
@@ -14,9 +15,9 @@ class ActorNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(None, state_size, action_size, 32, 32, 'actor')
+        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(max_aircraft, state_size, action_size, 32, 32, 'actor')
         print(self.model.summary())
-        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(None, state_size, action_size, 32, 32, 'actor_target')
+        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(max_aircraft, state_size, action_size, 32, 32, 'actor_target')
         self.action_gradient = tf.placeholder(tf.float32,[None, None, action_size])
         # Negative action gradients are used for gradient ascent.
         self.unnormalized_actor_gradients = tf.gradients(self.model.output, self.weights, -self.action_gradient)
@@ -57,9 +58,12 @@ class ActorNetwork(object):
     def predict(self, inputs):
         return self.model.predict(inputs)
 
+    def predict_target(self, inputs):
+        return self.target_model.predict(inputs)
+
 
 class ActorNetwork_shared_obs(object):
-    def __init__(self, sess, state_size, shared_state_size, action_size, MAX_AIRCRAFT, BATCH_SIZE, TAU, LEARNING_RATE):
+    def __init__(self, sess, state_size, action_size, MAX_AIRCRAFT, BATCH_SIZE, TAU, LEARNING_RATE):
         self.sess = sess
         self.BATCH_SIZE = BATCH_SIZE
         self.TAU = TAU
@@ -68,9 +72,9 @@ class ActorNetwork_shared_obs(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model, self.weights, self.actions,  self.state, self.shared_state = BiCNet.build_actor_shared_obs(MAX_AIRCRAFT, state_size, shared_state_size, action_size, 16, 16, 'actor')
+        self.model, self.weights, self.actions,  self.state, self.shared_state = BiCNet.build_actor_shared_obs(MAX_AIRCRAFT, state_size[0], state_size[1], action_size, 16, 16, 'actor')
         print(self.model.summary())
-        self.target_model, self.target_weights, self.target_actions, self.target_state, self.target_shared_state = BiCNet.build_actor_shared_obs(MAX_AIRCRAFT, state_size, shared_state_size, action_size, 16, 16, 'actor_target')
+        self.target_model, self.target_weights, self.target_actions, self.target_state, self.target_shared_state = BiCNet.build_actor_shared_obs(MAX_AIRCRAFT, state_size[0], state_size[1], action_size, 16, 16, 'actor_target')
         self.action_gradient = tf.placeholder(tf.float32,[None, None, action_size])
         # Negative action gradients are used for gradient ascent.
         self.unnormalized_actor_gradients = tf.gradients(self.model.output, self.weights, -self.action_gradient)
@@ -99,6 +103,9 @@ class ActorNetwork_shared_obs(object):
 
     def predict(self, inputs):
         return self.model.predict(inputs)
+
+    def predict_target(self, inputs):
+        return self.target_model.predict(inputs)
 
 
 if __name__ == '__main__':

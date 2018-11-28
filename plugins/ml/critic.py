@@ -5,7 +5,7 @@ import keras.backend as K
 import tensorflow as tf
 
 class CriticNetwork(object):
-    def __init__(self, sess, state_size, action_size, BATCH_SIZE, TAU, LEARNING_RATE):
+    def __init__(self, sess, state_size, action_size, max_agents, BATCH_SIZE, TAU, LEARNING_RATE):
         self.sess = sess
         self.BATCH_SIZE = BATCH_SIZE
         self.TAU = TAU
@@ -14,9 +14,9 @@ class CriticNetwork(object):
         K.set_session(sess)
 
         self.model, self.Q_values, self.actions, \
-        self.states = BiCNet.build_critic(None, state_size, action_size, 8, 8, LEARNING_RATE, 'critic')
+        self.states = BiCNet.build_critic(max_agents, state_size, action_size, 8, 8, LEARNING_RATE, 'critic')
         self.target_model, self.target_out, self.target_actions, \
-        self.target_states = BiCNet.build_critic(None, state_size, action_size, 8, 8, LEARNING_RATE, 'critic_target')
+        self.target_states = BiCNet.build_critic(max_agents, state_size, action_size, 8, 8, LEARNING_RATE, 'critic_target')
         self.action_grads = tf.gradients(self.Q_values, self.actions)
         self.sess.run(tf.global_variables_initializer())
 
@@ -30,6 +30,12 @@ class CriticNetwork(object):
         loss = self.model.train_on_batch([states, actions], y)
         return loss
 
+    def predict(self, states, actions):
+        return self.model.predict([states, actions])
+
+    def predict_target(self, states, actions):
+        return self.target_model.predict([states, actions])
+
     def update_target_network(self):
         critic_weights = self.model.get_weights()
         critic_target_weights = self.target_model.get_weights()
@@ -39,7 +45,7 @@ class CriticNetwork(object):
 
 
 class CriticNetwork_shared_obs(object):
-    def __init__(self, sess, state_size, shared_state_size, action_size, MAX_AIRCRAFT, BATCH_SIZE, TAU, LEARNING_RATE):
+    def __init__(self, sess, state_size, action_size, MAX_AIRCRAFT, BATCH_SIZE, TAU, LEARNING_RATE):
         self.sess = sess
         self.BATCH_SIZE = BATCH_SIZE
         self.TAU = TAU
@@ -48,9 +54,9 @@ class CriticNetwork_shared_obs(object):
         K.set_session(sess)
 
         self.model, self.Q_values, self.actions, self.states, \
-        self.shared_states = BiCNet.build_critic_shared_obs(MAX_AIRCRAFT, state_size, shared_state_size, action_size, 32, 32, LEARNING_RATE, 'critic')
+        self.shared_states = BiCNet.build_critic_shared_obs(MAX_AIRCRAFT, state_size[0], state_size[1], action_size, 32, 32, LEARNING_RATE, 'critic')
         self.target_model, self.target_out, self.target_actions, self.target_states, \
-        self.target_shared_states = BiCNet.build_critic_shared_obs(MAX_AIRCRAFT, state_size, shared_state_size, action_size, 32, 32, LEARNING_RATE, 'critic_target')
+        self.target_shared_states = BiCNet.build_critic_shared_obs(MAX_AIRCRAFT, state_size[0], state_size[1], action_size, 32, 32, LEARNING_RATE, 'critic_target')
         self.action_grads = tf.gradients(self.Q_values, self.actions)
         self.sess.run(tf.global_variables_initializer())
         print(self.model.summary())
@@ -63,6 +69,12 @@ class CriticNetwork_shared_obs(object):
 
     def train(self, states, actions, y):
         self.model.train_on_batch([states[0], states[1], actions], y)
+
+    def predict(self, states, actions):
+        return self.model.predict([states[0], states[1], actions])
+
+    def predict_target(self, states, actions):
+        return self.target_model.predict([states[0], states[1], actions])
 
     def update_target_network(self):
         critic_weights = self.model.get_weights()

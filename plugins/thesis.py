@@ -40,22 +40,22 @@ from shutil import copyfile
 def init_plugin():
     global env, agent, update_interval, routes, log_dir
 
-    # Create logging folder
+    # Create logging folder for Tensorflow summaries and saving network weights
     log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
         os.makedirs(log_dir+'training/')
         os.makedirs(log_dir+'test/')
 
-
+    # The settings file is copied as a record of the settings used for simulation
     copyfile('settings.cfg', log_dir+'settings.cfg')
 
-    # config
-    agent = Agent(CONF.state_size, CONF.shared_state_size, CONF.action_size, CONF.tau, CONF.gamma, CONF.critic_lr,
+    agent = Agent(CONF.state_size, CONF.action_size, CONF.tau, CONF.gamma, CONF.critic_lr,
                   CONF.actor_lr, CONF.memory_size, CONF.max_agents, CONF.batch_size, CONF.train_bool, CONF.test_dir,
-                  CONF.load_ep, CONF.sigma_OU, CONF.theta_OU, CONF.dt_OU)
+                  CONF.load_ep, CONF.sigma_OU, CONF.theta_OU, CONF.dt_OU, CONF.model_type)
 
-    env = Environment(CONF.state_size, CONF.scenario, CONF.shared_state_size)
+    # env = Environment(CONF)
+    env = Environment(CONF.state_size, CONF.scenario, CONF.model_type)
     # routes = dict()
 
     # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
@@ -163,7 +163,7 @@ def preupdate():
     collision = env.check_collision()
 
     if traf.ntraf!=0 and not collision:
-        action = agent.act_continuous(new_state)
+        action = agent.act(new_state)
         env.action_command(action)
 
 
@@ -205,10 +205,15 @@ def norm(data, axis=0):
 
 
 class Environment:
-    def __init__(self, state_size, scenario,  shared_state_size=0):
+    def __init__(self, state_size, scenario, model_type, shared_state_size=0):
         self.n_aircraft = traf.ntraf
-        self.state_size = state_size
-        self.shared_state_size = shared_state_size
+        if type(state_size)==list:
+            self.state_size = state_size[0]
+            self.shared_state_size = state_size[1]
+        else:
+            self.state_size = state_size
+            self.shared_state_size = 0
+
         self.ac_dict = {}
         self.prev_traf = 0
         self.observation = np.zeros((1,self.state_size))
@@ -220,19 +225,25 @@ class Environment:
         self.idx = []
         self.los_pairs = []
         self.dist_scale = 110
+        observation_dict = {'bicnet_normal': self.generate_observation_continuous,
+                            'bicnet_shared': self.generate_observation_continuous_shared}
+        action_dict = {'bicnet_normal': self.action_command,
+                       'bicnet_shared': self.action_command}
+        self.act = action_dict.get(model_type)
+        self.generate_observation = observation_dict.get(model_type)
 
         for id in traf.id:
             self.ac_dict[id]= [0,0,0]
 
 
     def init(self):
-        self.observation = [self.generate_observation_continuous(), self.generate_shared_observation()]
+        self.observation = self.generate_observation() #[self.generate_observation_continuous(), self.generate_shared_observation()]
         return self.observation
 
 
     def step(self):
         prev_observation = self.observation
-        self.observation = [self.generate_observation_continuous(), self.generate_shared_observation()]
+        self.observation = self.generate_observation()
         # Check termination conditions
         # self.los_pairs = detect_los(traf, traf, traf.asas.R, traf.asas.dh)
         # Add in 9999999 for vertical protection zone to ignore vertical separation
@@ -247,8 +258,8 @@ class Environment:
             stack.stack("DEL {}".format(traf.id[idx]))
 
         # There is a mismatch between the aircraft size in the observation returned for the replay memory and the
-        #         # observation required to select actions when an aircraft is deleted. Therefore two separate observations must
-        #         # be used.
+        # observation required to select actions when an aircraft is deleted. Therefore two separate observations must
+        # be used.
         replay_observation = self.observation
 
         if type(self.observation)==list:
@@ -272,7 +283,6 @@ class Environment:
                 self.observation[1] = self.observation[1][mask].reshape((traf.ntraf - len(done_idx), traf.ntraf - len(done_idx) - 1, self.shared_state_size))
         else:
             self.observation = np.delete(self.observation, done_idx, 0)
-
         self.idx = np.delete(traf.id, done_idx)
 
         return prev_observation, self.reward, replay_observation, done
@@ -331,8 +341,14 @@ class Environment:
             shared_obs[i, :, 3] = np.delete(normalize(traf.lon, minlon, maxlon), i)
             shared_obs[i, :, 4] = np.delete(traf.hdg/360., i)     # divide by 180
             shared_obs[i, :, 5] = np.delete(normalize(traf.cas, 75, 200), i)
-        print('shard_obs', shared_obs.shape)
+
+        if traf.ntraf==1:
+            shared_obs = np.zeros((traf.ntraf+1, traf.ntraf, self.shared_state_size))
+        # print('shard_obs', shared_obs.shape)
         return shared_obs
+
+    def generate_observation_continuous_shared(self):
+        return [self.generate_observation_continuous(), self.generate_shared_observation()]
 
 
     def generate_observation_discrete(self):
@@ -367,7 +383,11 @@ class Environment:
             stack.stack('HDG {} {}'.format(self.idx[i], action[i]))
 
         if len(self.idx)!=0:
-            dist = self.observation[0][:, :, 4]*self.dist_scale
+            obs = self.observation[0] if type(self.observation) == list else self.observation
+            if (len(obs.shape)==2):
+                obs = np.expand_dims(obs, axis=0)
+            # dist = obs[0][:, :, 4]*self.dist_scale
+            dist = obs[:, :, 4] * self.dist_scale
             dist_lim = 10
             dist_idx = np.where(np.abs(dist-dist_lim/2)<dist_lim/2)[1]
 
@@ -452,12 +472,17 @@ class Environment:
 
 
 class Agent:
-    def __init__(self, state_size, shared_state_size, action_size, tau=0.9, gamma=0.99, critic_lr=0.001, actor_lr=0.001, memory_size=10000, max_agents=10, batch_size = 32, training=True, load_dir='', load_ep=0, sigma=0.15, theta=.5, dt=0.1):
+    def __init__(self, state_size, action_size, tau=0.9, gamma=0.99, critic_lr=0.001, actor_lr=0.001, memory_size=10000, max_agents=10, batch_size = 32, training=True, load_dir='', load_ep=0, sigma=0.15, theta=.5, dt=0.1, model_type='bicnet_normal'):
         # Config parameters
         self.train_indicator = training
         self.action_size = action_size
-        self.state_size = state_size
-        self.shared_obs_size = shared_state_size
+        if type(state_size)==list:
+            self.state_size = state_size[0]
+            print('selfstate', self.state_size)
+            self.shared_obs_size = state_size[1]
+        else:
+            self.state_size = state_size
+            self.shared_obs_size = 0
         self.batch_size = batch_size
         self.tau = tau
         self.gamma = gamma
@@ -487,10 +512,26 @@ class Agent:
         self.sess = tf.Session(config=config)
         K.set_session(self.sess)
 
-        self.actor = ActorNetwork_shared_obs(self.sess, self.state_size, self.shared_obs_size, self.action_size,
-                                             self.max_agents, self.batch_size, self.tau, self.actor_learning_rate)
-        self.critic = CriticNetwork_shared_obs(self.sess, self.state_size, self.shared_obs_size, self.action_size,
-                                               self.max_agents, self.batch_size, self.tau, self.critic_learning_rate)
+
+        actor_dict = {'bicnet_normal': ActorNetwork,
+                      'bicnet_shared': ActorNetwork_shared_obs}
+        critic_dict = {'bicnet_normal': CriticNetwork,
+                       'bicnet_shared': CriticNetwork_shared_obs}
+        batch_dict = {'bicnet_normal': self.preprocess_batch,
+                      'bicnet_shared': self.preprocess_batch_shared}
+        act_dict = {'bicnet_normal': self.act_continuous,
+                    'bicnet_shared': self.act_continuous}
+
+
+        create_actor = actor_dict.get(model_type)
+        create_critic = critic_dict.get(model_type)
+        self.get_batch = batch_dict.get(model_type)
+        self.act = act_dict.get(model_type)
+
+        self.actor = create_actor(self.sess, state_size, self.action_size,
+                                  self.max_agents, self.batch_size, self.tau, self.actor_learning_rate)
+        self.critic = create_critic(self.sess, state_size, self.action_size,
+                                    self.max_agents, self.batch_size, self.tau, self.critic_learning_rate)
         self.replay_memory = ReplayMemory(self.memory_size)
 
         #Now load the weight
@@ -524,11 +565,12 @@ class Agent:
         if len(array.shape)==3:
             array = array.reshape((array.shape[1], array.shape[2]))
         result[0:array.shape[0], :] = array
+        # print('resultshape', result.shape)
         return result
 
     def pad_nines(self, array, max_timesteps):
         """Pad -999 for shared observations sequences"""
-        print("array shape", array.shape)
+        # print("array shape", array.shape)
         zeros = -999.0 * np.ones((max_timesteps, max_timesteps - 1, array.shape[-1]))
         if len(array.shape)==4:
             array=array.reshape((array.shape[1:]))
@@ -566,8 +608,6 @@ class Agent:
         self.writer.flush()
         self.summary_counter += 1
 
-
-
     def save_model(self, model, name):
         #yaml saves the model architecture
         model_yaml = model.to_yaml()
@@ -582,6 +622,51 @@ class Agent:
         self.save_model(self.critic.model, log_dir+'critic_model{0:05d}'.format(episode))
         self.save_model(self.critic.target_model, log_dir+'target_critic_model{0:05d}'.format(episode))
 
+    def preprocess_batch(self):
+        """
+        Unpack the batch into format that is workable for tensorflow models for a normal bicnet model
+        :return:
+        """
+        batch = self.replay_memory.getBatch(self.batch_size)
+        max_t = []
+        for i in range(self.batch_size):
+            # print('batch', batch[i])
+            max_t.append(batch[i][2].size) # Check the size of the reward
+
+        max_t = max(max_t)
+
+        # print('max_t', max_t)
+        states = np.asarray([self.pad_zeros(seq[0], max_t) for seq in batch])
+        actions = np.asarray([self.pad_zeros(seq[1], max_t) for seq in batch])
+        rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
+        new_states = np.asarray([self.pad_zeros(seq[3], max_t) for seq in batch])
+        dones = np.asarray([seq[4] for seq in batch])
+
+        return states, actions, rewards, new_states, dones
+
+    def preprocess_batch_shared(self):
+        """
+        Unpack the batch into format that is workable for tensorflow models for a nshared observation bicnet model
+        :return:
+        """
+        batch = self.replay_memory.getBatch(self.batch_size)
+        max_t = []
+        for i in range(self.batch_size):
+            max_t.append(batch[i][2].size)
+
+        max_t = max(max_t)
+        states = [np.asarray([self.pad_zeros(seq[0][0], max_t) for seq in batch])]
+        states.append(np.asarray([self.pad_nines(seq[0][1], max_t) for seq in batch]))
+        actions = np.asarray([self.pad_zeros(seq[1], max_t) for seq in batch])
+        rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
+        new_states = [np.asarray([self.pad_zeros(seq[3][0], max_t) for seq in batch])]
+        new_states.append(np.asarray([self.pad_nines(seq[3][1], max_t) for seq in batch]))
+        dones = np.asarray([seq[4] for seq in batch])
+
+        return states, actions, rewards, new_states, dones
+
+
+
     def train(self):
         if self.train_indicator:
             # TODO: Check that the gradient calculator ignores the zero input sequences.
@@ -591,50 +676,26 @@ class Agent:
             # In order to create sequences with equal length for batch processing sequences are padded with zeros to the
             # maximum sequence length in the batch. Keras can handle the zero padded sequences by ignoring the zero
             # calculations
-            max_t = self.max_agents
-            max_t = []
-            for i in range(self.batch_size):
-                max_t.append(batch[i][1].shape[0])
-            print('max_t', max_t)
-            max_t = max(max_t)
-            print('max_t', max_t)
-
-            if type(batch[0][0])==list:
-                # states = [[self.pad_zeros(seq[0][0], max_t), self.pad_nines(seq[0][1], max_t)] for seq in batch]
-                states = [ np.asarray([self.pad_zeros(seq[0][0], max_t) for seq in batch]) ]
-                states.append(np.asarray([self.pad_nines(seq[0][1], max_t) for seq in batch ]))
-                # new_states = [[self.pad_zeros(seq[3][0], max_t), self.pad_nines(seq[3][1], max_t)] for seq in batch]
-                new_states = [ np.asarray([self.pad_zeros(seq[3][0], max_t) for seq in batch]) ]
-                new_states.append(np.asarray([self.pad_nines(seq[3][1], max_t) for seq in batch ]))
-
-            else:
-                states = np.asarray([[self.pad_zeros(seq[0], max_t)] for seq in batch])
-                new_states = np.asarray([[self.pad_zeros(seq[3], max_t)] for seq in batch])
-
-            actions = np.asarray([self.pad_zeros(seq[1], max_t) for seq in batch])
-            rewards = np.asarray([self.pad_zeros(seq[2], max_t) for seq in batch])
-            dones = np.asarray([seq[4] for seq in batch])
-
-            print(new_states[0].shape, new_states[1].shape)
-            print('action', actions.shape, new_states[0].shape)
+            states, actions, rewards, new_states, dones = self.get_batch()
             # target_q_values = self.critic.target_model.predict(new_states, self.actor.target_model.predict(new_states))
-            target_q_values = self.critic.target_model.predict([new_states[0], new_states[1], self.actor.target_model.predict(new_states)])
+            # target_q_values = self.critic.target_model.predict([new_states[0], new_states[1], self.actor.target_model.predict(new_states)])
+            target_q_values = self.critic.predict_target(new_states, self.actor.predict_target(new_states))
             y_t = target_q_values.copy()
             #Compute the target values
             for k in range(len(batch)):
                 if dones[k]:
-                    y_t[k] = rewards[k].reshape((max_t, 1))
+                    y_t[k] = rewards[k].reshape((rewards.shape[1], 1))
                 else:
-                    y_t[k] = rewards[k].reshape((max_t, 1)) + self.gamma * target_q_values[k]
+                    y_t[k] = rewards[k].reshape((rewards.shape[1], 1)) + self.gamma * target_q_values[k]
 
-            prediction = self.critic.model.predict([states[0], states[1], actions])
+            # prediction = self.critic.model.predict([states, actions])
 
             # print('pred', prediction.shape, prediction)
             # print('y_t', y_t.shape, y_t)
 
 
 
-            loss = self.critic.train(states, actions, y_t)
+            # loss = self.critic.train(states, actions, y_t)
             actions_for_grad = self.actor.model.predict(states)
             grads = self.critic.gradients(states, actions_for_grad)
             # Mask gradients?
@@ -646,7 +707,7 @@ class Agent:
 
 
     def update_replay_memory(self, state, reward, done, new_state):
-        print('state_shape', state[1].shape)
+        # print('state_shape', state[1].shape)
         self.replay_memory.add(state, self.action.reshape(self.action.shape[1], self.action_size), reward, new_state, done)
 
 
@@ -712,20 +773,43 @@ class Agent:
 
 
     def act_continuous(self, state):
+        state_copy = state.copy()
         # No action should be taken if there are no aircraft, otherwise the program crashes.
-        n_aircraft = int(np.prod(state[0].shape)/self.state_size)
+        # n_aircraft = int(np.prod(obs.shape) / self.state_size)
+        if type(state)==list:
+            n_aircraft = int(np.prod(state[0].shape) / self.state_size)
+
+
+            if len(state_copy[0].shape)==2:
+                state_copy[0] = np.expand_dims(state_copy[0], axis=0)
+            if len(state_copy[1].shape)==2:
+                state_copy[1] = np.expand_dims(state_copy[1], axis=0)
+            obs = state_copy[0]
+            state_copy[1] = state[1].reshape(1, n_aircraft * (n_aircraft - 1), state[1].shape[-1])
+        else:
+            n_aircraft = int(np.prod(state.shape)/self.state_size)
+            if len(state_copy.shape)==2:
+                state_copy = np.expand_dims(state_copy, axis=0)
+
+            obs = state_copy
         if n_aircraft==0:
             return
 
         # state[0] = state[0].reshape(1, state[0].shape[0], state[0].shape[1])
         # state[0] = self.pad_zeros(state[0], self.max_agents).reshape((1, self.max_agents, self.state_size))
         # state[1] = self.pad_nines(state[1], self.max_agents).reshape((1, self.max_agents, self.max_agents-1, self.shared_obs_size))
-        state_copy = state.copy()
-        state_copy[0] = state[0].reshape(1, state[0].shape[0], state[0].shape[1])
-        state_copy[1] = state[1].reshape(1, n_aircraft*(n_aircraft-1), state[1].shape[-1])
-        self.action = self.actor.predict(state_copy)
+        # state_copy = state.copy()
+        # state_copy[0] = state[0].reshape(1, state[0].shape[0], state[0].shape[1])
 
-        state[0] = state[0].reshape(1, state[0].shape[0], state[0].shape[1])
+        # if n_aircraft==1:
+        #     state_copy[1] = state[1].reshape(1, n_aircraft, state[1].shape[-1])
+        # else:
+        #     state_copy[1] = state[1].reshape(1, n_aircraft*(n_aircraft-1), state[1].shape[-1])
+        # state_copy[1] = state[1].reshape(1, n_aircraft * (n_aircraft - 1), state[1].shape[-1])
+
+
+        self.action = self.actor.predict(state_copy)
+        # state[0] = state[0].reshape(1, state[0].shape[0], state[0].shape[1])
 
         # data = state
         # model = self.target.model
@@ -746,7 +830,7 @@ class Agent:
         # print_intermediate_layer_output(model, data, 'post_brnn')
 
         # Exploration noise is added only when no test episode is running
-        print(self.OU())
+        print('OU', self.OU())
         noise = self.OU()[0:n_aircraft].reshape(self.action.shape)
 
         if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
@@ -787,7 +871,8 @@ class Agent:
         y_offset = 0.107982 + 6.69737e-08
         action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
         dist_limit = 5 # nm
-        dist = state[0][:,:, 4] * 110
+        # dist = state[0][:,:, 4] * 110
+        dist = obs[:,:,4] * 110 # denormalize
         dist = dist.reshape(action.shape)
         mul_factor = 90*np.ones(dist.shape)
 
@@ -800,10 +885,11 @@ class Agent:
         dheading[plus] = np.abs(action[plus]-1) * mul_factor[plus]
         action[minus] = -1*action[minus]
 
-        qdr = state[0][:,:,3].transpose()*360-180 # Denormalize
+        # qdr = state[0][:,:,3].transpose()*360-180 # Denormalize
+        qdr = obs[:,:,3].transpose() * 360 - 180
         dheading = self.action[0] * mul_factor
         heading =  qdr + dheading
-        # print(self.action[0].ravel())
+        print('action', self.action.ravel())
         return heading.ravel()[0:n_aircraft]
 
 
