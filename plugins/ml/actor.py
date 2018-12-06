@@ -15,9 +15,9 @@ class ActorNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(max_aircraft, state_size, action_size, 32, 32, 'actor')
+        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(max_aircraft, state_size, action_size, 16, 16, 'actor')
         # print(self.model.summary())
-        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(max_aircraft, state_size, action_size, 32, 32, 'actor_target')
+        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(max_aircraft, state_size, action_size, 16, 16, 'actor_target')
         self.action_gradient = tf.placeholder(tf.float32,[None, None, action_size])
         # Negative action gradients are used for gradient ascent.
 
@@ -48,7 +48,6 @@ class ActorNetwork(object):
 
         self.sess.run(tf.global_variables_initializer())
 
-        # print(self.state.shape)
 
     def get_grads(self, states, action_grads):
         grads = self.sess.run(self.unnormalized_gradients, feed_dict={
@@ -67,11 +66,11 @@ class ActorNetwork(object):
     def train_separate(self, x, action_grads):
 
         for i in range(self.BATCH_SIZE):
-            self.sess.run(self.accumulated_gradients, feed_dict={
+            self.sess.run(self.evaluate_batch, feed_dict={
                 self.state: x[i],
                 self.action_gradient: action_grads[i]
             })
-
+        # grads = self.sess.run(self.accumulated_gardients)
         self.sess.run(self.apply_gradients)
         self.sess.run(self.reset_gradients)
 

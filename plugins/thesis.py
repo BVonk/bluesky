@@ -50,6 +50,7 @@ def init_plugin():
 
     # The settings file is copied as a record of the settings used for simulation
     copyfile('settings.cfg', log_dir+'settings.cfg')
+    copyfile('scenario/Bart/' + CONF.scenario, log_dir+CONF.scenario)
 
     agent = Agent(CONF.state_size, CONF.action_size, CONF.tau, CONF.gamma, CONF.critic_lr,
                   CONF.actor_lr, CONF.memory_size, CONF.max_agents, CONF.batch_size, CONF.train_bool, CONF.test_dir,
@@ -251,7 +252,7 @@ class Environment:
         self.los_pairs = detect_los(traf, traf, traf.asas.R, 9999999)
         self.check_reached()
         self.generate_reward()
-        print('rew', self.reward)
+        # print('rew', self.reward)
         done = True if self.done.all() == True else False
 
         done_idx = np.where(self.done == True)[0]
@@ -700,6 +701,7 @@ class Agent:
             actions_for_grads = self.actor.predict_separate(states)
             grads = self.critic.gradients_separate(states, actions_for_grads)
 
+
             self.actor.train_separate(states, grads)
             self.critic.train_separate(states, actions, y_t)
 
@@ -869,7 +871,7 @@ class Agent:
         # print_intermediate_layer_output(model, data, 'post_brnn')
 
         # Exploration noise is added only when no test episode is running
-        print('OU', self.OU())
+        # print('OU', self.OU())
         noise = self.OU()[0:n_aircraft].reshape(self.action.shape)
 
         if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
@@ -928,9 +930,9 @@ class Agent:
         qdr = obs[:,:,3].transpose() * 360 - 180
         dheading = self.action[0] * mul_factor
         # dheading = 90*np.ones(dheading.shape)
-        print('heading', dheading, self.action)
+        # print('heading', dheading, self.action)
         heading =  qdr + dheading
-        print('action', self.action.ravel())
+        # print('action', self.action.ravel())
         return heading.ravel()[0:n_aircraft]
 
 
@@ -986,7 +988,9 @@ class Agent:
             stack.stack("{} SPD {}".format(ac.id, speed_actions[i]))
 
     def update_cum_reward(self, reward):
-        self.cum_reward += 1
+        # print(reward)
+        self.cum_reward = 4 - len(reward)
+
         pass
         # self.cum_reward += reward
 

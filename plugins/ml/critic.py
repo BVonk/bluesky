@@ -14,9 +14,9 @@ class CriticNetwork(object):
         K.set_session(sess)
 
         self.model, self.Q_values, self.actions, \
-        self.states = BiCNet.build_critic(max_agents, state_size, action_size, 8, 8, LEARNING_RATE, 'critic')
+        self.states = BiCNet.build_critic(max_agents, state_size, action_size, 16, 16, LEARNING_RATE, 'critic')
         self.target_model, self.target_out, self.target_actions, \
-        self.target_states = BiCNet.build_critic(max_agents, state_size, action_size, 8, 8, LEARNING_RATE, 'critic_target')
+        self.target_states = BiCNet.build_critic(max_agents, state_size, action_size, 16, 16, LEARNING_RATE, 'critic_target')
         self.action_grads = tf.gradients(self.Q_values, self.actions)
 
         self.ys = tf.placeholder(shape = (None, None, None), dtype=tf.float32, name='ys')
@@ -52,6 +52,8 @@ class CriticNetwork(object):
         Train on batch without using zero padding in batch processing
         """
         for i in range(self.BATCH_SIZE):
+            if len(target[i].shape)!=3:
+                target[i] = np.expand_dims(target[i], axis=0)
             self.sess.run(self.evaluate_batch, feed_dict={
                             self.ys: target[i],
                             self.actions: action[i],
