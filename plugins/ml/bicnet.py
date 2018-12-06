@@ -3,17 +3,61 @@ from keras.layers import Dense, Input, TimeDistributed, Bidirectional, LSTM, Con
 from keras.optimizers import Adam
 import tensorflow as tf
 
+def bidirectional_layer(inputs):
+    data = inputs[0]
+    print(data.shape)
+    # sequence_length=inputs[1]
+    sequence_length=None
+    lstmUnits = 28
+    lstm_fw_cell = tf.contrib.rnn.BasicLSTMCell(lstmUnits, forget_bias=1.0, state_is_tuple=True, name='fw_cell')
+    lstm_bw_cell = tf.contrib.rnn.BasicLSTMCell(lstmUnits, forget_bias=1.0, state_is_tuple=True, name='bw_cell')
+    output, state = tf.nn.bidirectional_dynamic_rnn(cell_fw=lstm_fw_cell,
+                                          cell_bw=lstm_bw_cell,
+                                          inputs=data,
+                                          sequence_length=sequence_length,
+                                          time_major = False,
+                                          dtype=tf.float32)
+    out = tf.add(output[0], output[1])
+    return out
+
+def bidirectional_layer1(inputs):
+    data = inputs[0]
+    out = inputs[1]
+    backward = LSTM(hidden_size, return_sequences=True)(data)
+    forward = LSTM(hidden_size, return_sequences=True)(data)
+    tf.reverse(forward, axis=2)
+
+
+
+    def reverse_func(x, mask=None):
+        return tf.reverse(x, [False, True, False])
+
+#def mask_sequence_length(data, sequence_length):
+#    mask = np.
+
 class BiCNet:
     @staticmethod
     def build_actor(max_agents, obs_dim, act_dim, H1, H2, name):
         max_agents=None
         S = Input(shape=(max_agents, obs_dim), name='input_states')
+#        seq_l = Input(shape=(1), name='sequence_length', dtype=tf.int32)
         # Set the masking value to ignore 0 padded sequence inputs.
         mask = Masking(mask_value=0., name='sequence_masking')(S)
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
+
+        # backward = LSTM(hidden_size, return_sequences=True)(h0)
+        # forward = LSTM(hidden_size, return_sequences=True)(h0)
+        #
+        # def reverse_func(x, mask=None):
+        #     return tf.reverse(x, [False, True, False])
+        #
+        # h1 = Lambda(bidirectional_layer, name='bidirectional_layer')([h0, seq_l])
+        # h1 = bidirectional_layer([h0, seq_l])
         h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
         h3c = Activation('tanh', name='tanh')(h2)
+        # tf.assign
+
         out = h3c
         model = Model(inputs=S, outputs=out)
 
@@ -26,7 +70,36 @@ class BiCNet:
                         layer_name = weight.name.split('/')[-1]
                         tf.summary.histogram(layer_name, weight)
 
-        return model, model.trainable_weights, model.output, S
+        return model, model.trainable_weights, out, S
+
+    @staticmethod
+    def build_actor1(max_agents, obs_dim, act_dim, H1, H2, name):
+        with tf.name_scope(name):
+            max_agents=None
+            S = tf.placeholder(shape=(None, max_agents, obs_dim), dtype=tf.float32, name='input_states')
+            seq_l = tf.placeholder(shape=([None, None]), name='sequence_length', dtype=tf.int32)
+            # Set the masking value to ignore 0 padded sequence inputs.
+            # mask = Masking(mask_value=0., name='sequence_masking')(S)
+            # h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(S)
+#            h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
+
+            h1 = bidirectional_layer(h0)
+            # h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
+            # h3c = Activation('tanh', name='tanh')(h2)
+            out = h1
+            # model = Model(inputs=[S, seq_l], outputs=out)
+
+            # Create summaries for layer visualisation
+            # layers = model.layers
+            # with tf.name_scope(name):
+            #     for layer in layers:
+            #         with tf.name_scope(layer.name):
+            #             for weight in layer.weights:
+            #                 layer_name = weight.name.split('/')[-1]
+            #                 tf.summary.histogram(layer_name, weight)
+
+        return 'test123', tf.trainable_variables(scope=name), out, S
+
 
     @staticmethod
     def build_actor_shared_obs(max_agents, local_obs_dim, shared_obs_dim, act_dim, H1, H2, name):

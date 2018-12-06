@@ -33,6 +33,7 @@ from keras.layers.merge import Add, Multiply, Subtract
 import keras.backend as K
 import tensorflow as tf
 from shutil import copyfile
+from copy import deepcopy
 
 
 ### Initialization function of your plugin. Do not change the name of this
@@ -154,7 +155,7 @@ def preupdate():
         agent.update_replay_memory(state, reward, done, new_state)
 
         if agent.replay_memory.num_experiences > agent.batch_size:
-            agent.train()
+            agent.train_no_batch()
         # agent.write_summaries(reward)
         # Now get observation without the deleted aircraft for acting. Otherwise an error occurs because the deleted
         # aircraft no longer exists in the stack.
@@ -665,7 +666,45 @@ class Agent:
 
         return states, actions, rewards, new_states, dones
 
+    def train_no_batch(self):
+        """
+        Experimental function to check batches without any significant reason. Averaging the gradients will be done
+        after the batch. This should not hurt performance too much, because no GPU is used anyway.
+        :return:
+        """
+        if self.train_indicator:
+            batch = self.replay_memory.getBatch(self.batch_size)
+            actor_gradients = []
+            critic_gradients = []
 
+            # First obtain all the gradients from the critic before training the critic.
+            states = [np.expand_dims(seq[0], axis=0) for seq in batch]
+            actions = [np.expand_dims(seq[1], axis=0) for seq in batch]
+            rewards = [seq[2] for seq in batch]
+            new_states = [np.expand_dims(seq[3], axis=0) for seq in batch]
+            dones = [seq[4] for seq in batch]
+
+            # for sample in batch:
+            #     states, actions, rewards, new_states, dones = sample
+
+            target_q_values = self.critic.predict_target_separate(new_states, self.actor.predict_target_separate(new_states))
+            y_t = deepcopy(target_q_values)
+            for k in range(len(batch)):
+                if dones[k]:
+                    y_t[k] = rewards[k].reshape((rewards[k].shape[0], 1))
+                else:
+                    y_t[k] = rewards[k].reshape((rewards[k].shape[0], 1)) + self.gamma * target_q_values[k]
+
+
+
+            actions_for_grads = self.actor.predict_separate(states)
+            grads = self.critic.gradients_separate(states, actions_for_grads)
+
+            self.actor.train_separate(states, grads)
+            self.critic.train_separate(states, actions, y_t)
+
+            self.actor.update_target_network()
+            self.critic.update_target_network()
 
     def train(self):
         if self.train_indicator:
@@ -844,7 +883,7 @@ class Agent:
         # from the actor therefore is not probably masked in the critic due to the nonzero values. Therefore the masked
         # actor output is manually reset to 0 here. It is better to use tensorflow for masked output in recurrent
         # networks, because Tensorflow does output 0 for masked inputs.
-        self.action[:, n_aircraft: , :] = 0
+        self.action[:, n_aircraft:, :] = 0
 
         # data = state
         # model = self.target.model
@@ -888,6 +927,8 @@ class Agent:
         # qdr = state[0][:,:,3].transpose()*360-180 # Denormalize
         qdr = obs[:,:,3].transpose() * 360 - 180
         dheading = self.action[0] * mul_factor
+        # dheading = 90*np.ones(dheading.shape)
+        print('heading', dheading, self.action)
         heading =  qdr + dheading
         print('action', self.action.ravel())
         return heading.ravel()[0:n_aircraft]
