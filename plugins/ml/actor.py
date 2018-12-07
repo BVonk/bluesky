@@ -42,7 +42,7 @@ class ActorNetwork(object):
 
         self.apply_gradients = self.optimizer.apply_gradients(zip(self.accumulated_gradients, self.model.trainable_weights))
 
-        self.optimizer = tf.train.AdamOptimizer(LEARNING_RATE).apply_gradients(zip(self.normalized_gradients, self.weights))
+        self.optimize = tf.train.AdamOptimizer(LEARNING_RATE).apply_gradients(zip(self.normalized_gradients, self.weights))
 
 
 
@@ -95,6 +95,11 @@ class ActorNetwork(object):
         for i in range(self.BATCH_SIZE):
             out.append(self.target_model.predict(inputs[i]))
         return out
+
+
+    def update_learning_rate(self, learning_rate):
+        self.LEARNING_RATE = learning_rate
+        self.optimizer = tf.train.AdamOptimizer(learning_rate)
 
 
     def update_target_network(self):

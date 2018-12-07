@@ -104,6 +104,10 @@ class CriticNetwork(object):
             out.append(self.target_model.predict([state[i], actions[i]]))
         return out
 
+    def update_learning_rate(self, learning_rate):
+        self.LEARNING_RATE = learning_rate
+        self.optimizer = tf.train.AdamOptimizer(learning_rate)
+
     def update_target_network(self):
         critic_weights = self.model.get_weights()
         critic_target_weights = self.target_model.get_weights()
