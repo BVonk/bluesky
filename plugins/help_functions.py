@@ -72,7 +72,8 @@ def normalize(x, low, high):
     :param high:
     :return:
     """
-    y = (x-low) / (high-low)
+
+    y = (x-low) / (high-low) * 2 - 1
     return y
 
 def print_intermediate_layer_output(model, data, layer_name):
