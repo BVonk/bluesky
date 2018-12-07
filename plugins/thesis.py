@@ -60,13 +60,18 @@ def init_plugin():
     env = Environment(CONF.state_size, CONF.scenario, CONF.model_type)
     # routes = dict()
 
-    # TODO: Rethink or tune the OU exploration noise. Noise should be more suttle perhaps
     # TODO: Find system performance indicator
     # TODO: Implement minimum wake separation, minimum wake separation is defined from trailing experiments
     # TODO: Set destination for every aircraft (FAF) for designated runway
     # TODO: Use BlueSKy logging / plotting
     # TODO: Fix circling target problem, this problem occurs at higher speeds, currently solved by reducing speed to 200 m/s near the runway. Second option is adding speed changes (instantaneous?)
     # TODO: Check all intermediate layers of the critic jwz.
+    # TODO: Replace LSTM with RNN for easier shit
+    # TODO: Initialize the initial RNN values with 0 for the 'hidden state'
+    # TODO: Create multiple scenarios for curriculum learning
+    # TODO: Check the initial
+    # TODO: Find some global optimization parameter
+    # TODO: Annealing of the environment noise
 
     config = {
         # The name of your plugin
@@ -170,7 +175,7 @@ def preupdate():
 
 
     # Check if all aircraft in simulation landed and there are no more scenario commands left
-    if (env.get_done() and len(stack.get_scendata()[0])==0) or collision:
+    if (env.get_done() and len(stack.get_scendata()[0])==0) or collision or env.step_num>125:
         # Reset environment states and agent states
         if env.episode % 50==0:
             agent.save_models(env.episode)
@@ -218,6 +223,7 @@ class Environment:
 
         self.ac_dict = {}
         self.prev_traf = 0
+        self.step_num = 0
         self.observation = np.zeros((1,self.state_size))
         self.done = np.array([False])
         self.state_normalizer = Normalizer(self.state_size)
@@ -244,7 +250,8 @@ class Environment:
 
 
     def step(self):
-        prev_observation = self.observation
+        self.step_num += 1
+        self.prev_observation = self.observation
         self.observation = self.generate_observation()
         # Check termination conditions
         # self.los_pairs = detect_los(traf, traf, traf.asas.R, traf.asas.dh)
@@ -287,21 +294,26 @@ class Environment:
             self.observation = np.delete(self.observation, done_idx, 0)
         self.idx = np.delete(traf.id, done_idx)
 
-        return prev_observation, self.reward, replay_observation, done
+        return self.prev_observation, self.reward, replay_observation, done
 
     def generate_reward(self):
         """ Generate reward scalar for each aircraft"""
-        global_reward = -0.5
+        global_reward = -0.05
         reached_reward = self.done * 10
         los_reward = np.zeros(reached_reward.shape)
+        forward_reward = np.zeros(reached_reward.shape)
+        forward_reward[np.where(self.observation[:,4]<self.prev_observation[:,4])[0]] = 0.02
+        forward_reward = 0.25 * np.abs(self.observation[:,3])
+
+
         if len(self.los_pairs) > 0:
             ac_list = [ac[0] for ac in self.los_pairs]
             traf_list = list(traf.id)
             idx = [traf_list.index(x) for x in ac_list]
             for i in idx:
-                los_reward[i] = los_reward[i] - 50
-        self.reward = np.asarray(reached_reward + global_reward + los_reward).reshape((reached_reward.shape[0],1))
-
+                los_reward[i] = los_reward[i] - 25
+        self.reward = np.asarray(reached_reward + global_reward + los_reward + forward_reward).reshape((reached_reward.shape[0],1))
+        print(self.reward)
 
     def generate_observation_continuous(self):
         """ Generate observation of size N_aircraft x state_size"""
@@ -314,6 +326,7 @@ class Environment:
         qdr, dist = qdrdist_matrix(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
         qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
         obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist, traf.cas]).transpose()
+        # Normalize input data to the range [-1, ,1]
         obs = np.array([normalize(traf.lat, minlat, maxlat),
                         normalize(traf.lon, minlon, maxlon),
                         normalize(traf.hdg, 0, 360),
@@ -459,6 +472,7 @@ class Environment:
         self.done = np.array([False])
         self.idx = []
         self.los_pairs = []
+        self.step_num = 0
 
         stack.stack('open ./scenario/bart/{}'.format(self.scn))
         # load_routes()
@@ -476,6 +490,7 @@ class Environment:
 class Agent:
     def __init__(self, state_size, action_size, tau=0.9, gamma=0.99, critic_lr=0.001, actor_lr=0.001, memory_size=10000, max_agents=10, batch_size = 32, training=True, load_dir='', load_ep=0, sigma=0.15, theta=.5, dt=0.1, model_type='bicnet_normal'):
         # Config parameters
+
         self.train_indicator = training
         self.action_size = action_size
         if type(state_size)==list:
@@ -504,7 +519,7 @@ class Agent:
         # self.wp_action_size = 3
         # self.spd_action_size = len(self.speed_values)
 
-        #self.wp_action_size * self.spd_action_size
+        # self.wp_action_size * self.spd_action_size
 
         self.action = []
         self.summary_counter = 0
@@ -873,10 +888,13 @@ class Agent:
         # Exploration noise is added only when no test episode is running
         # print('OU', self.OU())
         noise = self.OU()[0:n_aircraft].reshape(self.action.shape)
-
+        print(not self.summary_counter % CONF.test_freq, not self.train_indicator)
         if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
+            print('act1', self.action)
             self.action = self.action + noise
+            print(noise, self.action)
+
             self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
             self.action = np.minimum(np.ones(self.action.shape), self.action)
 
@@ -915,7 +933,7 @@ class Agent:
         # dist = state[0][:,:, 4] * 110
         dist = obs[:,:,4] * 110 # denormalize
         dist = dist.reshape(action.shape)
-        mul_factor = 90*np.ones(dist.shape)
+        mul_factor = 80*np.ones(dist.shape)
 
         wheredist = np.where(dist<dist_limit)[0]
         mul_factor[wheredist] = dist[wheredist] / dist_limit * 90
