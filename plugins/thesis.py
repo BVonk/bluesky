@@ -72,6 +72,7 @@ def init_plugin():
     # TODO: Check the initial
     # TODO: Find some global optimization parameter
     # TODO: Annealing of the environment noise
+    # TODO: Use warm-up episode
 
     config = {
         # The name of your plugin

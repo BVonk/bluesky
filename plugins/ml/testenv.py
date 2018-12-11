@@ -10,7 +10,7 @@ from actor import ActorNetwork
 from ReplayMemory import ReplayMemory
 import tensorflow as tf
 from OU import OrnsteinUhlenbeckActionNoise
-
+from copy import deepcopy
 
 class Env():
     def __init__(self, players):
@@ -89,9 +89,8 @@ def train(sess, env, actor, critic, actor_noise):
                 dones = np.asarray([seq[4] for seq in batch])
                 y_t = rewards.copy()
 
-                target_q_values = critic.target_model.predict([new_states, actor.target_model.predict(new_states)])
-
                 #Compute the target values
+                target_q_values = critic.target_model.predict([new_states, actor.target_model.predict(new_states)])
                 for k in range(len(batch)):
                     if dones[k]:
                         y_t[k] = rewards[k]
@@ -110,6 +109,37 @@ def train(sess, env, actor, critic, actor_noise):
                     actor.update_target_network()
                     critic.update_target_network()
 
+                    """
+                states = [np.expand_dims(seq[0], axis=0) for seq in batch]
+                actions = [np.expand_dims(seq[1], axis=0) for seq in batch]
+                rewards = [seq[2] for seq in batch]
+                new_states = [np.expand_dims(seq[3], axis=0) for seq in batch]
+                dones = [seq[4] for seq in batch]
+
+
+
+
+                target_q_values = critic.predict_target_separate(new_states, actor.predict_target_separate(new_states))
+                y_t = deepcopy(target_q_values)
+                for k in range(len(batch)):
+                    if dones[k]:
+                        y_t[k] = rewards[k].reshape((rewards[k].shape[0], 1))
+                    else:
+                        gamma = 0.98
+                        y_t[k] = rewards[k].reshape((rewards[k].shape[0], 1)) + gamma * target_q_values[k]
+
+
+                actions_for_grads = actor.predict_separate(states)
+                grads = critic.gradients_separate(states, actions_for_grads)
+
+
+                actor.train_separate(states, grads)
+                critic.train_separate(states, actions, y_t)
+
+                actor.update_target_network()
+                critic.update_target_network()
+
+"""
 
             ep_reward += r
 
@@ -144,8 +174,8 @@ def main():
         crlr = 0.001
         aclr = 0.001
         tau = 0.001
-        actor = ActorNetwork(sess, state_dim, action_dim, 32, tau, aclr)
-        critic = CriticNetwork(sess, state_dim, action_dim, 32, tau, crlr)
+        actor = ActorNetwork(sess, state_dim, action_dim, 15, 32, tau, aclr)
+        critic = CriticNetwork(sess, state_dim, action_dim, 15, 32, tau, crlr)
         actor_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros((env.players, action_dim)))
 
         train(sess, env, actor, critic, actor_noise)

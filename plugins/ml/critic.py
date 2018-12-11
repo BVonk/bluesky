@@ -1,6 +1,6 @@
 import numpy as np
-from plugins.ml.bicnet import BiCNet
-# from bicnet import BiCNet
+# from plugins.ml.bicnet import BiCNet
+from bicnet import BiCNet
 import keras.backend as K
 import tensorflow as tf
 
@@ -21,7 +21,7 @@ class CriticNetwork(object):
 
         self.ys = tf.placeholder(shape = (None, None, None), dtype=tf.float32, name='ys')
         cost = tf.square(self.Q_values-self.ys)
-        self.gradients = tf.gradients(cost, self.model.trainable_weights)
+        self.grads = tf.gradients(cost, self.model.trainable_weights)
         # self.grads = zip(self.gradients, self.model.trainable_weights)
         # self.optimizer = tf.train.AdamOptimizer(LEARNING_RATE).apply_gradients(self.grads)
         self.optimizer = tf.train.AdamOptimizer(LEARNING_RATE)
@@ -36,7 +36,7 @@ class CriticNetwork(object):
         self.reset_gradients = [gradient.assign(tf.zeros_like(gradient)) for gradient in
                            self.accumulated_gradients]
 
-        self.evaluate_batch = [accumulated_gradient.assign_add(gradient/self.BATCH_SIZE) for accumulated_gradient, gradient in zip(self.accumulated_gradients, self.gradients)]
+        self.evaluate_batch = [accumulated_gradient.assign_add(gradient/self.BATCH_SIZE) for accumulated_gradient, gradient in zip(self.accumulated_gradients, self.grads)]
 
         self.apply_gradients = self.optimizer.apply_gradients(zip(self.accumulated_gradients, self.model.trainable_weights))
 
