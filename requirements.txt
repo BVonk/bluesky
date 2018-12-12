@@ -3,9 +3,11 @@ numpy
 scipy
 matplotlib
 pyopengl-accelerate
+pyopengl
 msgpack
 zmq
 pygame
 h5py
 tensorflow
+tensorboard
 keras
