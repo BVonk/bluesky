@@ -1,7 +1,14 @@
 from keras.models import Model
 from keras.layers import Dense, Input, TimeDistributed, Bidirectional, LSTM, Concatenate, Masking, Activation, Multiply, Lambda, Reshape
 from keras.optimizers import Adam
+from custom_keras_layers import ZeroMaskedEntries
 import tensorflow as tf
+
+
+def apply_mask(data):
+    mask = data[0]
+    data = data[1]
+    return tf.where(mask, data, tf.zeros_like(data))
 
 def bidirectional_layer(inputs):
     data = inputs[0]
@@ -55,12 +62,17 @@ class BiCNet:
         # h1 = Lambda(bidirectional_layer, name='bidirectional_layer')([h0, seq_l])
         # h1 = bidirectional_layer([h0, seq_l])
         h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
+        ZeroMaskedEntries
         h3c = Activation('tanh', name='tanh')(h2)
         # tf.assign
 
-        out = h3c
+
+        h4 = TimeDistributed(ZeroMaskedEntries(name='zeromasked'))(h2)
+        out = h4
         model = Model(inputs=S, outputs=out)
 
+#        h4 = TimeDisbributed(Lambda(apply_mask)([model.layers[-1].output_mask, model.output])
+#        model = Model(inputs=model.inputs, outputs=h4)
         # Create summaries for layer visualisation
         layers = model.layers
         with tf.name_scope(name):
@@ -71,6 +83,29 @@ class BiCNet:
                         tf.summary.histogram(layer_name, weight)
 
         return model, model.trainable_weights, out, S
+
+    def build_actor2(max_agents, obs_dim, act_dim, H1, H2, name):
+        with tf.scope(name):
+            S = Input(shape=(max_agents, obs_dim), name='input_states')
+            mask = Masking(mask_value=0., name='sequence_masking')
+            td1 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
+            td1_model = Model(inputs=S, output=td1)
+
+            lstmUnits = 28
+            lstm_fw_cell = tf.contrib.rnn.BasicLSTMCell(lstmUnits, forget_bias=1.0, state_is_tuple=True, name='fw_cell')
+            lstm_bw_cell = tf.contrib.rnn.BasicLSTMCell(lstmUnits, forget_bias=1.0, state_is_tuple=True, name='bw_cell')
+            output, state = tf.nn.bidirectional_dynamic_rnn(cell_fw=lstm_fw_cell,
+                                                  cell_bw=lstm_bw_cell,
+                                                  inputs=td1_model.output,
+                                                  #sequence_length=sequence_length,
+                                                  time_major = False,
+                                                  dtype=tf.float32)
+            brnn = tf.add(output[0], output[1])
+            mask2 = Masking(mask_value=0., name='sequence_masking2')
+            td2 = TimeDistributed(Dense(H1, activation='relu'), name='post_brnn')(mask2)
+            td2_model = Model(TD2)
+
+        return
 
     @staticmethod
     def build_actor1(max_agents, obs_dim, act_dim, H1, H2, name):
@@ -154,7 +189,9 @@ class BiCNet:
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
         h2 = TimeDistributed(Dense(1, activation='linear'), name='post_brnn')(h1)
-        out = h2
+
+        h4 = TimeDistributed(ZeroMaskedEntries(name='zeromasked'))(h2)
+        out = h4
         model = Model(inputs=[S,A], outputs=out)
         adam = Adam(lr=LR)
         model.compile(loss='mse', optimizer=adam)
@@ -311,8 +348,8 @@ def remove_mask(x):
 
 if __name__ == '__main__':
     tf.reset_default_graph()
-    actor, _, _ = BiCNet.build_actor(80, 50, 5, 64 ,64)
-    critic, _, _ = BiCNet.build_critic(80, 50, 5, 64, 64, 0.001)
+    actor, _, _ = BiCNet.build_actor(None, 6, 3, 64 ,64, 0.001, 'actor')
+    critic, _, _ = BiCNet.build_critic(None, 6, 3, 64 ,64, 0.001, 'critic')
     actor.summary()
     critic.summary()
 

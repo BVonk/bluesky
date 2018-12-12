@@ -50,7 +50,7 @@ class ActorNetwork(object):
 
 
     def get_grads(self, states, action_grads):
-        grads = self.sess.run(self.unnormalized_gradients, feed_dict={
+        grads = self.sess.run(self.unnormalized_actor_gradients, feed_dict={
                     self.state: states,
                     self.action_gradient: action_grads
         })
