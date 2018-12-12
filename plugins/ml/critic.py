@@ -1,6 +1,6 @@
 import numpy as np
-# from plugins.ml.bicnet import BiCNet
-from bicnet import BiCNet
+from plugins.ml.bicnet import BiCNet
+# from bicnet import BiCNet
 import keras.backend as K
 import tensorflow as tf
 

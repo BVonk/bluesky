@@ -162,7 +162,8 @@ def preupdate():
         agent.update_replay_memory(state, reward, done, new_state)
 
         if agent.replay_memory.num_experiences > agent.batch_size:
-            agent.train_no_batch()
+            # agent.train_no_batch()
+            agent.train()
         # agent.write_summaries(reward)
         # Now get observation without the deleted aircraft for acting. Otherwise an error occurs because the deleted
         # aircraft no longer exists in the stack.
@@ -176,7 +177,7 @@ def preupdate():
 
 
     # Check if all aircraft in simulation landed and there are no more scenario commands left
-    if (env.get_done() and len(stack.get_scendata()[0])==0) or collision or env.step_num>125:
+    if (env.get_done() and len(stack.get_scendata()[0])==0) or collision or env.step_num>170:
         # Reset environment states and agent states
         if env.episode % 50==0:
             agent.save_models(env.episode)
@@ -314,7 +315,7 @@ class Environment:
             for i in idx:
                 los_reward[i] = los_reward[i] - 25
         self.reward = np.asarray(reached_reward + global_reward + los_reward + forward_reward).reshape((reached_reward.shape[0],1))
-        print(self.reward)
+        print('reward', self.reward)
 
     def generate_observation_continuous(self):
         """ Generate observation of size N_aircraft x state_size"""
@@ -894,17 +895,18 @@ class Agent:
             # Add exploration noise and clip to range [-1, 1] for action space
             print('act1', self.action)
             self.action = self.action + noise
-            print(noise, self.action)
+            print('noise', noise, self.action)
 
             self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
             self.action = np.minimum(np.ones(self.action.shape), self.action)
+            print('action', self.action)
 
         # Keras masked inputs do not output 0, but rather output the previous output without modifying it. This gives
         # issues when using the action outputs as inputs for the critic and trying to mask it. The nonzero masked output
         # from the actor therefore is not probably masked in the critic due to the nonzero values. Therefore the masked
         # actor output is manually reset to 0 here. It is better to use tensorflow for masked output in recurrent
         # networks, because Tensorflow does output 0 for masked inputs.
-        self.action[:, n_aircraft:, :] = 0
+        # self.action[:, n_aircraft:, :] = 0
 
         # data = state
         # model = self.target.model
@@ -926,31 +928,33 @@ class Agent:
 
 
         # Apply Bell curve here to sample from to get action values
-        mu = 0
-        sigma = 0.5
-        y_offset = 0.107982 + 6.69737e-08
-        action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
+        # mu = 0
+        # sigma = 0.5
+        # y_offset = 0.107982 + 6.69737e-08
+        # action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
         dist_limit = 5 # nm
         # dist = state[0][:,:, 4] * 110
-        dist = obs[:,:,4] * 110 # denormalize
-        dist = dist.reshape(action.shape)
+        dist = (obs[:,:,4]+1)/2 * 110 # denormalize
+        # dist = dist.reshape(action.shape)
         mul_factor = 80*np.ones(dist.shape)
 
         wheredist = np.where(dist<dist_limit)[0]
-        mul_factor[wheredist] = dist[wheredist] / dist_limit * 90
+        mul_factor[wheredist] = dist[wheredist] / dist_limit * 80
         minus = np.where(self.action.reshape(self.action.shape[1])<0)[0]
         plus = np.where(self.action.reshape(self.action.shape[1])>=0)[0]
-        dheading = np.zeros(action.shape)
-        dheading[minus] = (action[minus] - 1) * mul_factor[minus]
-        dheading[plus] = np.abs(action[plus]-1) * mul_factor[plus]
-        action[minus] = -1*action[minus]
+        # dheading = np.zeros(action.shape)
+        # dheading[minus] = (action[minus] - 1) * mul_factor[minus]
+        # dheading[plus] = np.abs(action[plus]-1) * mul_factor[plus]
+        # action[minus] = -1*action[minus]
 
         # qdr = state[0][:,:,3].transpose()*360-180 # Denormalize
-        qdr = obs[:,:,3].transpose() * 360 - 180
+        qdr = obs[:,:,3].transpose() * 180 #- 180
         dheading = self.action[0] * mul_factor
+
         # dheading = 90*np.ones(dheading.shape)
         # print('heading', dheading, self.action)
         heading =  qdr + dheading
+        print(qdr, dheading, heading, mul_factor, wheredist, dist)
         # print('action', self.action.ravel())
         return heading.ravel()[0:n_aircraft]
 
@@ -1008,7 +1012,8 @@ class Agent:
 
     def update_cum_reward(self, reward):
         # print(reward)
-        self.cum_reward = 4 - len(reward)
+        self.cum_reward -= 1
+        # self.cum_reward = 4 - len(reward)
 
         pass
         # self.cum_reward += reward

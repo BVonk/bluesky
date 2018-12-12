@@ -1,7 +1,8 @@
 from keras.models import Model
 from keras.layers import Dense, Input, TimeDistributed, Bidirectional, LSTM, Concatenate, Masking, Activation, Multiply, Lambda, Reshape
 from keras.optimizers import Adam
-from custom_keras_layers import ZeroMaskedEntries
+# from custom_keras_layers import ZeroMaskedEntries
+from plugins.ml.custom_keras_layers import ZeroMaskedEntries
 import tensorflow as tf
 
 
@@ -61,8 +62,8 @@ class BiCNet:
         #
         # h1 = Lambda(bidirectional_layer, name='bidirectional_layer')([h0, seq_l])
         # h1 = bidirectional_layer([h0, seq_l])
-        h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
-        ZeroMaskedEntries
+        # h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
+        h2 = TimeDistributed(Dense(act_dim, activation='tanh'), name='post_brnn')(h1)
         h3c = Activation('tanh', name='tanh')(h2)
         # tf.assign
 
