@@ -184,7 +184,7 @@ def preupdate():
         env.action_command(action)
 
     if collision:
-        agent.summary_counter = 200
+        agent.cum_reward = -200
 
     # Check if all aircraft in simulation landed and there are no more scenario commands left
     if (env.get_done() and len(stack.get_scendata()[0])==0) or collision or env.step_num>170:
@@ -953,7 +953,7 @@ class Agent:
         # dist = dist.reshape(action.shape)
         mul_factor = 80*np.ones(dist.shape)
 
-        wheredist = np.where(dist<dist_limit)[0]
+        wheredist = np.where(dist<dist_limit)
         mul_factor[wheredist] = dist[wheredist] / dist_limit * 80
         minus = np.where(self.action.reshape(self.action.shape[1])<0)[0]
         plus = np.where(self.action.reshape(self.action.shape[1])>=0)[0]
