@@ -313,7 +313,7 @@ class Environment:
         los_reward = np.zeros(reached_reward.shape)
         forward_reward = np.zeros(reached_reward.shape)
         forward_reward[np.where(self.observation[:,4]<self.prev_observation[:,4])[0]] = 0.02
-        forward_reward = 0.2 * (np.abs(self.observation[:,3]*180 - degto180(traf.hdg)) % 180) / 90
+        forward_reward = 0.2 - 0.2 * (np.abs(self.observation[:,3]*180 - degto180(traf.hdg)) % 180) / 90
         # print('obs', self.observation[:,3], traf.hdg, self.observation[:,3]*180)
 
 
@@ -324,7 +324,7 @@ class Environment:
             for i in idx:
                 los_reward[i] = los_reward[i] - 25
         self.reward = np.asarray(reached_reward + global_reward + los_reward + forward_reward).reshape((reached_reward.shape[0],1))
-        # print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward)
+        print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward, (np.abs(self.observation[:,3]*180 - degto180(traf.hdg)) % 180))
 
     def generate_observation_continuous(self):
         """ Generate observation of size N_aircraft x state_size"""

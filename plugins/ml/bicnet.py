@@ -68,7 +68,7 @@ class BiCNet:
         # tf.assign
 
 
-        h4 = TimeDistributed(ZeroMaskedEntries(name='zeromasked'))(h2)
+        h4 = TimeDistributed(ZeroMaskedEntries(name='zeromasked'), name='zero_masked')(h2)
         out = h4
         model = Model(inputs=S, outputs=out)
 
