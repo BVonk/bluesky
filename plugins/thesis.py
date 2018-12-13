@@ -183,6 +183,8 @@ def preupdate():
         action = agent.act(new_state)
         env.action_command(action)
 
+    if collision:
+        agent.summary_counter = 200
 
     # Check if all aircraft in simulation landed and there are no more scenario commands left
     if (env.get_done() and len(stack.get_scendata()[0])==0) or collision or env.step_num>170:
@@ -325,6 +327,7 @@ class Environment:
             for i in idx:
                 los_reward[i] = los_reward[i] - 50
         self.reward = np.asarray(reached_reward + global_reward + los_reward + forward_reward).reshape((reached_reward.shape[0],1))
+        self.reward = np.asarray(reached_reward + global_reward + los_reward ).reshape((reached_reward.shape[0],1))
         print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward, (np.abs(self.observation[:,3]*180 - degto180(traf.hdg)) % 180))
 
     def generate_observation_continuous(self):
