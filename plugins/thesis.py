@@ -70,14 +70,15 @@ def init_plugin():
     # TODO: Set destination for every aircraft (FAF) for designated runway
     # TODO: Use BlueSKy logging / plotting
     # TODO: Fix circling target problem, this problem occurs at higher speeds, currently solved by reducing speed to 200 m/s near the runway. Second option is adding speed changes (instantaneous?)
-    # TODO: Check all intermediate layers of the critic jwz.
+
     # TODO: Replace LSTM with RNN for easier shit
     # TODO: Initialize the initial RNN values with 0 for the 'hidden state'
     # TODO: Create multiple scenarios for curriculum learning
-    # TODO: Check the initial
+
     # TODO: Find some global optimization parameter
     # TODO: Annealing of the environment noise
-    # TODO: Use warm-up episode
+
+    # TODO: Check gradients for the critic
 
     config = {
         # The name of your plugin
@@ -322,7 +323,7 @@ class Environment:
             traf_list = list(traf.id)
             idx = [traf_list.index(x) for x in ac_list]
             for i in idx:
-                los_reward[i] = los_reward[i] - 25
+                los_reward[i] = los_reward[i] - 50
         self.reward = np.asarray(reached_reward + global_reward + los_reward + forward_reward).reshape((reached_reward.shape[0],1))
         print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward, (np.abs(self.observation[:,3]*180 - degto180(traf.hdg)) % 180))
 
@@ -900,7 +901,8 @@ class Agent:
         # print('OU', self.OU())
         noise = self.OU()[0:n_aircraft].reshape(self.action.shape)
         # print(not self.summary_counter % CONF.test_freq, not self.train_indicator)
-        print('action', self.action, '' , noise, 'noise')
+        print('action', self.action)
+        print('noise', noise)
         if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
 
@@ -959,7 +961,7 @@ class Agent:
 
         # qdr = state[0][:,:,3].transpose()*360-180 # Denormalize
         qdr = obs[:,:,3].transpose() * 180 #- 180
-        dheading = self.action[0] * mul_factor
+        dheading = self.action * mul_factor.reshape(self.action.shape)
 
         # dheading = 90*np.ones(dheading.shape)
         # print('heading', dheading, self.action)
