@@ -34,16 +34,21 @@ import keras.backend as K
 import tensorflow as tf
 from shutil import copyfile
 from copy import deepcopy
-
+# from keras.backend import manual_variable_initialization
+# manual_variable_initialization(True)
 
 ### Initialization function of your plugin. Do not change the name of this
 ### function, as it is the way BlueSky recognises this file as a plugin.
 def init_plugin():
     global env, agent, update_interval, routes, log_dir
 
+    if os.path.isdir(CONF.log_dir):
+        log_dir = CONF.log_dir
+    else:
+        log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
+
     # Create logging folder for Tensorflow summaries and saving network weights
-    log_dir = 'output/'+(time.strftime('%Y%m%d_%H%M%S')+'/')
-    if not os.path.exists(log_dir):
+    if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
         os.makedirs(log_dir+'training/')
         os.makedirs(log_dir+'test/')
@@ -53,7 +58,7 @@ def init_plugin():
     copyfile('scenario/Bart/' + CONF.scenario, log_dir+CONF.scenario)
 
     agent = Agent(CONF.state_size, CONF.action_size, CONF.tau, CONF.gamma, CONF.critic_lr,
-                  CONF.actor_lr, CONF.memory_size, CONF.max_agents, CONF.batch_size, CONF.train_bool, CONF.test_dir,
+                  CONF.actor_lr, CONF.memory_size, CONF.max_agents, CONF.batch_size, CONF.train_bool, log_dir,
                   CONF.load_ep, CONF.sigma_OU, CONF.theta_OU, CONF.dt_OU, CONF.model_type)
 
     # env = Environment(CONF)
@@ -161,7 +166,9 @@ def preupdate():
         agent.update_cum_reward(reward)
         agent.update_replay_memory(state, reward, done, new_state)
 
-        if agent.replay_memory.num_experiences > agent.batch_size:
+        # if agent.replay_memory.num_experiences > agent.batch_size:
+        print('memory_size', agent.replay_memory.num_experiences)
+        if agent.replay_memory.num_experiences > 1000 or agent.replay_memory.num_experiences == agent.memory_size:
             # agent.train_no_batch()
             agent.train()
         # agent.write_summaries(reward)
@@ -230,7 +237,8 @@ class Environment:
         self.done = np.array([False])
         self.state_normalizer = Normalizer(self.state_size)
         # self.wp_db = self.load_waypoints()
-        self.episode = 1
+        self.episode = int(CONF.load_ep)
+        print('episode', self.episode)
         self.scn = scenario
         self.idx = []
         self.los_pairs = []
@@ -553,17 +561,6 @@ class Agent:
                                     self.max_agents, self.batch_size, self.tau, self.critic_learning_rate)
         self.replay_memory = ReplayMemory(self.memory_size)
 
-        #Now load the weight
-        if not self.train_indicator:
-            try:
-                self.actor.model.load_weights(self.load_dir + "actor_model" + self.load_ep + ".h5")
-                self.critic.model.load_weights(self.load_dir + "critic_model" + self.load_ep + ".h5")
-                self.actor.target_model.load_weights(self.load_dir + "target_actor_model" + self.load_ep + ".h5")
-                self.critic.target_model.load_weights(self.load_dir + "target_critic_model" + self.load_ep + ".h5")
-                print("Weights load successfully")
-            except:
-                print("Cannot find the weights")
-
         # Set up summary Ops
         self.summary_ops, self.summary_vars, self.summary_ops_test, self.summary_vars_test = self.build_summaries()
 
@@ -573,6 +570,17 @@ class Agent:
         else:
             summary_dir = log_dir + 'test/'
         self.writer = tf.summary.FileWriter(summary_dir, self.sess.graph)
+
+        #Now load the weight
+        try:
+            self.actor.load_weights(self.load_dir + "actor_model" + "{0:05d}".format(int(self.load_ep)) + ".h5")
+            self.critic.load_weights(self.load_dir + "critic_model" + "{0:05d}".format(int(self.load_ep)) + ".h5")
+            self.actor.load_target_weights(self.load_dir + "target_actor_model" + "{0:05d}".format(int(self.load_ep)) + ".h5")
+            self.critic.load_target_weights(self.load_dir + "target_critic_model" + "{0:05d}".format(int(self.load_ep)) + ".h5")
+            self.summary_counter = int(self.load_ep)
+            print("Weights load successfully")
+        except:
+            print("Cannot find the weights")
 
     def pad_zeros(self, array, max_timesteps):
         """Pad 0's for local observation sequences"""

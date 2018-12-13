@@ -109,6 +109,12 @@ class ActorNetwork(object):
             actor_target_weights[i] = self.TAU * actor_weights[i] + (1 - self.TAU)* actor_target_weights[i]
         self.target_model.set_weights(actor_target_weights)
 
+    def load_weights(self, filepath):
+        self.model.load_weights(filepath, by_name=False)
+
+    def load_target_weights(self, filepath):
+        self.target_model.load_weights(filepath, by_name=False)
+
 
 class ActorNetwork_shared_obs(object):
     def __init__(self, sess, state_size, action_size, MAX_AIRCRAFT, BATCH_SIZE, TAU, LEARNING_RATE):

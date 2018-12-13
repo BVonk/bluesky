@@ -115,6 +115,12 @@ class CriticNetwork(object):
             critic_target_weights[i] = self.TAU * critic_weights[i] + (1 - self.TAU)* critic_target_weights[i]
         self.target_model.set_weights(critic_target_weights)
 
+    def load_weights(self, filepath):
+        self.model.load_weights(filepath, by_name=False)
+
+    def load_target_weights(self, filepath):
+        self.target_model.load_weights(filepath, by_name=False)
+
 def bidirectional_layer(inputs):
     data = inputs[0]
     sequence_length=inputs[1]
