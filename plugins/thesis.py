@@ -167,7 +167,7 @@ def preupdate():
         agent.update_replay_memory(state, reward, done, new_state)
 
         # if agent.replay_memory.num_experiences > agent.batch_size:
-        print('memory_size', agent.replay_memory.num_experiences)
+        # print('memory_size', agent.replay_memory.num_experiences)
         if agent.replay_memory.num_experiences > 1000 or agent.replay_memory.num_experiences == agent.memory_size:
             # agent.train_no_batch()
             agent.train()
@@ -313,7 +313,8 @@ class Environment:
         los_reward = np.zeros(reached_reward.shape)
         forward_reward = np.zeros(reached_reward.shape)
         forward_reward[np.where(self.observation[:,4]<self.prev_observation[:,4])[0]] = 0.02
-        forward_reward = 0.25 * np.abs(self.observation[:,3])
+        forward_reward = 0.2 * (np.abs(self.observation[:,3]*180 - degto180(traf.hdg)) % 180) / 90
+        # print('obs', self.observation[:,3], traf.hdg, self.observation[:,3]*180)
 
 
         if len(self.los_pairs) > 0:
@@ -323,7 +324,7 @@ class Environment:
             for i in idx:
                 los_reward[i] = los_reward[i] - 25
         self.reward = np.asarray(reached_reward + global_reward + los_reward + forward_reward).reshape((reached_reward.shape[0],1))
-        print('reward', self.reward)
+        # print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward)
 
     def generate_observation_continuous(self):
         """ Generate observation of size N_aircraft x state_size"""
@@ -505,7 +506,7 @@ class Agent:
         self.action_size = action_size
         if type(state_size)==list:
             self.state_size = state_size[0]
-            print('selfstate', self.state_size)
+            # print('selfstate', self.state_size)
             self.shared_obs_size = state_size[1]
         else:
             self.state_size = state_size
@@ -898,16 +899,17 @@ class Agent:
         # Exploration noise is added only when no test episode is running
         # print('OU', self.OU())
         noise = self.OU()[0:n_aircraft].reshape(self.action.shape)
-        print(not self.summary_counter % CONF.test_freq, not self.train_indicator)
+        # print(not self.summary_counter % CONF.test_freq, not self.train_indicator)
+        print('action', self.action, '' , noise, 'noise')
         if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
-            print('act1', self.action)
+
             self.action = self.action + noise
-            print('noise', noise, self.action)
+            # print('noise', noise, self.action)
 
             self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
             self.action = np.minimum(np.ones(self.action.shape), self.action)
-            print('action', self.action)
+            # print('action', self.action)
 
         # Keras masked inputs do not output 0, but rather output the previous output without modifying it. This gives
         # issues when using the action outputs as inputs for the critic and trying to mask it. The nonzero masked output
