@@ -768,7 +768,7 @@ class Agent:
             grads = self.critic.gradients(states, actions_for_grad)
             # Mask gradients?
             # print('grads', len(grads[0]), grads[0])
-            loss = self.critic.train(states, actions, y_t)
+            self.critic.train(states, actions, y_t)
             self.actor.train(states, grads)
             self.actor.update_target_network()
             self.critic.update_target_network()

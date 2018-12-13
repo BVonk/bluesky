@@ -21,11 +21,12 @@ class CriticNetwork(object):
 
         self.ys = tf.placeholder(shape = (None, None, None), dtype=tf.float32, name='ys')
         cost = tf.square(self.Q_values-self.ys)
-        self.grads = tf.gradients(cost, self.model.trainable_weights)
+        self.unnormalized_gradients = tf.gradients(cost, self.model.trainable_weights)
+        self.normalized_gradients = list(map(lambda x: tf.div(x, self.BATCH_SIZE), self.unnormalized_gradients))
         # self.grads = zip(self.gradients, self.model.trainable_weights)
         # self.optimizer = tf.train.AdamOptimizer(LEARNING_RATE).apply_gradients(self.grads)
         self.optimizer = tf.train.AdamOptimizer(LEARNING_RATE)
-
+        self.optimize = self.optimizer.apply_gradients(zip(self.normalized_gradients, self.model.trainable_weights))
 
         # define variables to save the gradients in each batch
         self.accumulated_gradients = [tf.Variable(tf.zeros_like(tv.initialized_value()),
@@ -36,7 +37,7 @@ class CriticNetwork(object):
         self.reset_gradients = [gradient.assign(tf.zeros_like(gradient)) for gradient in
                            self.accumulated_gradients]
 
-        self.evaluate_batch = [accumulated_gradient.assign_add(gradient/self.BATCH_SIZE) for accumulated_gradient, gradient in zip(self.accumulated_gradients, self.grads)]
+        self.evaluate_batch = [accumulated_gradient.assign_add(gradient/self.BATCH_SIZE) for accumulated_gradient, gradient in zip(self.accumulated_gradients, self.unnormalized_gradients)]
 
         self.apply_gradients = self.optimizer.apply_gradients(zip(self.accumulated_gradients, self.model.trainable_weights))
 
@@ -44,8 +45,13 @@ class CriticNetwork(object):
 
 
 
-    def grads(self):
-        return self.accumulated_gradients
+    def cgradient(self, states, actions, y):
+        grads = self.sess.run(self.normalized_gradients, feed_dict={
+            self.states: states,
+            self.actions: actions,
+            self.ys: y
+        })
+        return grads
 
     def train_separate(self, x, action, target):
         """
@@ -83,8 +89,12 @@ class CriticNetwork(object):
 
 
     def train(self, states, actions, y):
-        loss = self.model.train_on_batch([states, actions], y)
-        return loss
+        self.sess.run(self.optimize, feed_dict={
+            self.states: states,
+            self.actions: actions,
+            self.ys: y
+        })
+        # loss = self.model.train_on_batch([states, actions], y)
 
     def predict(self, states, actions):
         return self.model.predict([states, actions])
