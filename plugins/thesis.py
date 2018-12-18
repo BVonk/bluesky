@@ -325,7 +325,7 @@ class Environment:
             traf_list = list(traf.id)
             idx = [traf_list.index(x) for x in ac_list]
             for i in idx:
-                los_reward[i] = los_reward[i] - 50
+                los_reward[i] = los_reward[i] - 5
         self.reward = np.asarray(reached_reward + global_reward + los_reward + forward_reward).reshape((reached_reward.shape[0],1))
         self.reward = np.asarray(reached_reward + global_reward + los_reward ).reshape((reached_reward.shape[0],1))
         print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward, (np.abs(self.observation[:,3]*180 - degto180(traf.hdg)) % 180))
@@ -417,7 +417,7 @@ class Environment:
             if (len(obs.shape)==2):
                 obs = np.expand_dims(obs, axis=0)
             # dist = obs[0][:, :, 4]*self.dist_scale
-            dist = obs[:, :, 4] * self.dist_scale
+            dist = (obs[:,:,4]+1)/2 * self.dist_scale
             dist_lim = 10
             dist_idx = np.where(np.abs(dist-dist_lim/2)<dist_lim/2)[1]
 
