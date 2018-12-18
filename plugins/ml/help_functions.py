@@ -76,6 +76,34 @@ def normalize(x, low, high):
     y = (x-low) / (high-low) * 2 - 1
     return y
 
+
+def denormalize(x, low, high):
+    """
+    Denormalized the input to original range
+    :param x:
+    :param low:
+    :param high:
+    :return:
+    """
+    y = (x + (low + high)/(high - low)) * (high - low) / 2
+    return y
+
+
+def rescale(x, xlow, xhigh, low, high):
+    """
+    Rescales the input x to new range
+    :param x:
+    :param xlow:
+    :param xhigh:
+    :param low:
+    :param high:
+    :return:
+    """
+    x = (x-xlow) / (xhigh-xlow)
+    x = x  * (high - low) + low
+    return x
+
+
 def print_intermediate_layer_output(model, data, layer_name):
     """
     Prints the output and shape of intermediate model layers for debugging help.
