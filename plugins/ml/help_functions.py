@@ -66,7 +66,7 @@ def abc_formula(a, b, c):
 
 def normalize(x, low, high):
     """
-    Normalizes the input to a zero mean
+    Normalizes the input to a zero mean with range [-1, 1]
     :param x:
     :param low:
     :param high:
@@ -102,6 +102,13 @@ def rescale(x, xlow, xhigh, low, high):
     x = (x-xlow) / (xhigh-xlow)
     x = x  * (high - low) + low
     return x
+
+
+def degtoqdr180(hdg, qdr):
+    return (hdg + 180 - qdr) % 360 - 180
+
+def qdr180todeg(hdg, qdr):
+    return (hdg + qdr + 360) % 360
 
 
 def print_intermediate_layer_output(model, data, layer_name):

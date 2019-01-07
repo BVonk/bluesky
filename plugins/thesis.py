@@ -8,9 +8,9 @@ Created on Thu Jun  7 10:35:02 2018
 """ Plugin to resolve conflicts """
 # Import the global bluesky objects. Uncomment the ones you need
 from bluesky import stack, sim, traf, navdb  #, settings, navdb, traf, sim, scr, tools
-from bluesky.tools.geo import kwikdist, qdrpos, qdrdist, qdrdist_matrix
+from bluesky.tools.geo import qdrdist, qdrdist_matrix
+from bluesky.tools.aero import g0
 from bluesky.tools.misc import degto180
-from bluesky.tools.aero import nm, g0
 import bluesky.settings as CONF
 
 from plugins.ml.actor import ActorNetwork, ActorNetwork_shared_obs
@@ -18,18 +18,10 @@ from plugins.ml.critic import CriticNetwork, CriticNetwork_shared_obs
 from plugins.ml.ReplayMemory import ReplayMemory
 from plugins.ml.normalizer import Normalizer
 from plugins.ml.OU import OrnsteinUhlenbeckActionNoise
-from plugins.help_functions import detect_los, normalize, print_intermediate_layer_output
-from plugins.vierd import ETA
-import pickle
-import random
+from plugins.ml.help_functions import detect_los, normalize, degtoqdr180, qdr180todeg
 import numpy as np
 import time
 import os
-from collections import deque
-from keras.models import Sequential, Model, model_from_yaml
-from keras.layers import Dense, Dropout, Input, RepeatVector, Lambda
-from keras.optimizers import Adam, RMSprop
-from keras.layers.merge import Add, Multiply, Subtract
 import keras.backend as K
 import tensorflow as tf
 from shutil import copyfile
@@ -65,20 +57,17 @@ def init_plugin():
     env = Environment(CONF.state_size, CONF.scenario, CONF.model_type)
     # routes = dict()
 
+
+    # TODO: Fix the state representation to prevent the discontinuity from occurring.
+    # TODO: Write about the discontinuity
     # TODO: Find system performance indicator
     # TODO: Implement minimum wake separation, minimum wake separation is defined from trailing experiments
-    # TODO: Set destination for every aircraft (FAF) for designated runway
-    # TODO: Use BlueSKy logging / plotting
-    # TODO: Fix circling target problem, this problem occurs at higher speeds, currently solved by reducing speed to 200 m/s near the runway. Second option is adding speed changes (instantaneous?)
 
     # TODO: Replace LSTM with RNN for easier shit
     # TODO: Initialize the initial RNN values with 0 for the 'hidden state'
     # TODO: Create multiple scenarios for curriculum learning
-
     # TODO: Find some global optimization parameter
     # TODO: Annealing of the environment noise
-
-    # TODO: Check gradients for the critic
 
     config = {
         # The name of your plugin
@@ -149,6 +138,7 @@ def update():
 
     pass
 
+
 def init():
     # load_routes()
     pass
@@ -198,6 +188,7 @@ def preupdate():
 def reset():
     pass
 
+
 def load_routes():
     wpts = np.loadtxt('plugins/ml/routes/testroute.txt')
     i=0
@@ -205,6 +196,7 @@ def load_routes():
     for j in range(wpts.shape[0]):
            for k in range(int(wpts.shape[1]/2)):
                stack.stack('DEFWPT RL{}{}{}, {}, {}, FIX'.format(i, j, k, wpts[j,k*2], wpts[j,k*2+1]))
+
 
 def get_routes():
     wpts = np.loadtxt('plugins/ml/routes/testroute.txt')
@@ -305,6 +297,8 @@ class Environment:
                 self.observation[1] = self.observation[1][mask].reshape((traf.ntraf - len(done_idx), traf.ntraf - len(done_idx) - 1, self.shared_state_size))
         else:
             self.observation = np.delete(self.observation, done_idx, 0)
+        self.dist = np.delete(self.dist, done_idx)
+        self.qdr = np.delete(self.qdr, done_idx)
         self.idx = np.delete(traf.id, done_idx)
 
         return self.prev_observation, self.reward, replay_observation, done
@@ -315,8 +309,8 @@ class Environment:
         reached_reward = self.done * 10
         los_reward = np.zeros(reached_reward.shape)
         forward_reward = np.zeros(reached_reward.shape)
-        forward_reward[np.where(self.observation[:,4]<self.prev_observation[:,4])[0]] = 0.02
-        forward_reward = 0.2 - 0.2 * (np.abs(self.observation[:,3]*180 - degto180(traf.hdg)) % 180) / 90
+        # forward_reward[np.where(self.observation[:,4]<self.prev_observation[:,4])[0]] = 0.02
+        forward_reward = 0.2 - 0.4 * degtoqdr180(traf.hdg, self.qdr) / 180
         # print('obs', self.observation[:,3], traf.hdg, self.observation[:,3]*180)
 
 
@@ -328,18 +322,19 @@ class Environment:
                 los_reward[i] = los_reward[i] - 5
         self.reward = np.asarray(reached_reward + global_reward + los_reward + forward_reward).reshape((reached_reward.shape[0],1))
         self.reward = np.asarray(reached_reward + global_reward + los_reward ).reshape((reached_reward.shape[0],1))
-        print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward, (np.abs(self.observation[:,3]*180 - degto180(traf.hdg)) % 180))
+        print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward, (np.abs(self.qdr - degto180(traf.hdg)) % 180))
 
     def generate_observation_continuous(self):
         """ Generate observation of size N_aircraft x state_size"""
-        destidx = navdb.getaptidx('EHAM')
+
 
         minlat, maxlat = 50.75428888888889, 55.
         minlon, maxlon = 2., 7.216944444444445
-
+        destidx = navdb.getaptidx('EHAM')
         lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
-        qdr, dist = qdrdist_matrix(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
-        qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
+        qdr, dist = qdrdist(traf.lat, traf.lon, lat*np.ones(traf.lat.shape), lon*np.ones(traf.lon.shape))
+        # qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
+        self.qdr, self.dist = qdr, dist
         obs = np.array([traf.lat, traf.lon, traf.hdg, qdr, dist, traf.cas]).transpose()
         # Normalize input data to the range [-1, ,1]
         obs = np.array([normalize(traf.lat, minlat, maxlat),
@@ -348,6 +343,12 @@ class Environment:
                         normalize(qdr+180, 0, 360),
                         normalize(dist, 0, self.dist_scale),
                         normalize(traf.cas, 80, 200)]).transpose()
+
+        obs = np.array([normalize(traf.lat, minlat, maxlat),
+                        normalize(traf.lon, minlon, maxlon),
+                        degtoqdr180(traf.hdg, qdr),
+                        normalize(dist, 0, self.dist_scale)
+                        ]).transpose()
         return obs
 
     def generate_shared_observation(self):
@@ -417,9 +418,10 @@ class Environment:
             if (len(obs.shape)==2):
                 obs = np.expand_dims(obs, axis=0)
             # dist = obs[0][:, :, 4]*self.dist_scale
-            dist = (obs[:,:,4]+1)/2 * self.dist_scale
+            dist = np.asarray(self.dist) #(obs[:,:,4]+1)/2 * self.dist_scale
             dist_lim = 10
-            dist_idx = np.where(np.abs(dist-dist_lim/2)<dist_lim/2)[1]
+            print(np.where(np.abs(dist-dist_lim/2)<dist_lim/2))
+            dist_idx = np.where(np.abs(dist-dist_lim/2)<dist_lim/2)[0]
 
 
             for idx in dist_idx:
@@ -888,6 +890,21 @@ class Agent:
         # print_intermediate_layer_output(model, data, 'pre_brnn')
         # print_intermediate_layer_output(model, data, 'brnn')
         # print_intermediate_layer_output(model, data, 'post_brnn')
+        qdr, dist = qdrdist(traf.lat, traf.lon,
+                            traf.actwp.lat, traf.actwp.lon)  # [deg][nm])
+
+        # check which aircraft have reached their destination by checkwaypoint type = 3 (destination) and the relative
+        # heading to this waypoint is exceeding 150
+        dest = np.asarray([traf.ap.route[i].wptype[traf.ap.route[i].iactwp] for i in range(traf.ntraf)]) == 3
+        away = np.abs(degto180(traf.trk % 360. - qdr % 360.)) > 100.
+        d = dist < 2
+        done_idx = np.where(away * dest * d)[0]
+
+        tas = np.delete(traf.tas, done_idx, 0)
+        bank = np.delete(traf.bank, done_idx, 0)
+        hdg = np.delete(traf.hdg, done_idx, 0)
+        traflat = np.delete(traf.lat, done_idx, 0)
+        traflon = np.delete(traf.lon, done_idx, 0)
 
 
         # data = [state[0], state[1], self.action]
@@ -902,6 +919,11 @@ class Agent:
 
         # Exploration noise is added only when no test episode is running
         # print('OU', self.OU())
+        annealing_factor = 1
+        if self.summary_counter > 1000:
+            annealing_factor = 1 - 0.0003 * self.summary_counter
+            annealing_factor = np.max(annealing_factor, 0.15)
+
         noise = self.OU()[0:n_aircraft].reshape(self.action.shape)
         # print(not self.summary_counter % CONF.test_freq, not self.train_indicator)
         print('action', self.action)
@@ -909,38 +931,12 @@ class Agent:
         if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
             # Add exploration noise and clip to range [-1, 1] for action space
 
-            self.action = self.action + noise
+            self.action = self.action + noise * annealing_factor
             # print('noise', noise, self.action)
 
             self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
             self.action = np.minimum(np.ones(self.action.shape), self.action)
             # print('action', self.action)
-
-        # Keras masked inputs do not output 0, but rather output the previous output without modifying it. This gives
-        # issues when using the action outputs as inputs for the critic and trying to mask it. The nonzero masked output
-        # from the actor therefore is not probably masked in the critic due to the nonzero values. Therefore the masked
-        # actor output is manually reset to 0 here. It is better to use tensorflow for masked output in recurrent
-        # networks, because Tensorflow does output 0 for masked inputs.
-        # self.action[:, n_aircraft:, :] = 0
-
-        # data = state
-        # model = self.target.model
-        # print_intermediate_layer_output(model, data, 'merged_mask')
-        # print_intermediate_layer_output(model, data, 'pre_brnn')
-        # print_intermediate_layer_output(model, data, 'brnn')
-        # print_intermediate_layer_output(model, data, 'post_brnn')
-
-
-        # data = [state[0], state[1], self.action]
-        # model = self.critic.model
-        # print_intermediate_layer_output(model, data, 'input_actions')
-        # print_intermediate_layer_output(model, data, 'max_pool')
-        # print_intermediate_layer_output(model, data, 'concatenate_inputs')
-        # print_intermediate_layer_output(model, data, 'input_mask')
-        # print_intermediate_layer_output(model, data, 'pre_brnn')
-        # print_intermediate_layer_output(model, data, 'brnn')
-        # print_intermediate_layer_output(model, data, 'post_brnn')
-
 
         # Apply Bell curve here to sample from to get action values
         # mu = 0
@@ -949,9 +945,35 @@ class Agent:
         # action = bell_curve(self.action[0], mu=mu, sigma=sigma, y_offset=y_offset, scaled=True)
         dist_limit = 5 # nm
         # dist = state[0][:,:, 4] * 110
+        """
         dist = (obs[:,:,4]+1)/2 * 110 # denormalize
         # dist = dist.reshape(action.shape)
         mul_factor = 80*np.ones(dist.shape)
+        """
+        # Compute multiplier for angle difference in action command
+        turnrad = np.square(tas) / (np.maximum(0.01 * np.ones(tas.shape), np.tan(bank)) * g0)  # [m]
+        max_angle = (tas * CONF.update_interval) / (2 * np.pi * turnrad) * 360
+
+
+        dheading = self.action.reshape(max_angle.shape) * max_angle
+
+
+        destidx = navdb.getaptidx('EHAM')
+        lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
+        qdr, dist = qdrdist(traflat, traflon, lat*np.ones(traflat.shape), lon*np.ones(traflon.shape))
+        # qdr, dist = np.asarray(qdr)[0], np.asarray(dist)[0]
+        # print('qdr', qdr)
+        qdr = (qdr+360)%360
+        # qdr = degtoqdr180(traf.hdg + dheading, qdr)
+        heading = degtoqdr180(hdg + dheading, qdr) # traf.hdg + dheading + 360
+        # heading = np.maximum(-90*np.ones(heading.shape), heading)
+        # heading = np.minimum(+90*np.ones(heading.shape), heading)
+
+        # print("maxa {},\n dhdg {},\n qdr {},\n, , \n hdg1 {}\n, hdg2{}, \ntarget_hdg\n{}".format(max_angle, dheading, qdr, traf.hdg, heading, qdr180todeg(heading, qdr)))
+        heading = qdr180todeg(heading, qdr)
+        print('HEADING', heading)
+        return heading.ravel()[0:n_aircraft]
+
 
         wheredist = np.where(dist<dist_limit)
         mul_factor[wheredist] = dist[wheredist] / dist_limit * 80
