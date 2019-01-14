@@ -14,9 +14,9 @@ class CriticNetwork(object):
         K.set_session(sess)
 
         self.model, self.Q_values, self.actions, \
-        self.states = BiCNet.build_critic(max_agents, state_size, action_size, 16, 16, LEARNING_RATE, 'critic')
+        self.states = BiCNet.build_critic(max_agents, state_size, action_size, 32, 32, LEARNING_RATE, 'critic')
         self.target_model, self.target_out, self.target_actions, \
-        self.target_states = BiCNet.build_critic(max_agents, state_size, action_size, 16, 16, LEARNING_RATE, 'critic_target')
+        self.target_states = BiCNet.build_critic(max_agents, state_size, action_size, 32, 32, LEARNING_RATE, 'critic_target')
         self.action_grads = tf.gradients(self.Q_values, self.actions)
 
         self.ys = tf.placeholder(shape = (None, None, None), dtype=tf.float32, name='ys')

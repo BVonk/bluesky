@@ -15,9 +15,9 @@ class ActorNetwork(object):
         K.set_session(sess)
 
         #Now create the model
-        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(max_aircraft, state_size, action_size, 16, 16, 'actor')
+        self.model, self.weights, self.actions,  self.state = BiCNet.build_actor(max_aircraft, state_size, action_size, 32, 32, 'actor')
         # print(self.model.summary())
-        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(max_aircraft, state_size, action_size, 16, 16, 'actor_target')
+        self.target_model, self.target_weights, self.target_actions, self.target_state = BiCNet.build_actor(max_aircraft, state_size, action_size, 32, 32, 'actor_target')
         self.action_gradient = tf.placeholder(tf.float32,[None, None, action_size])
         # Negative action gradients are used for gradient ascent.
 
@@ -26,8 +26,10 @@ class ActorNetwork(object):
 
 
         self.unnormalized_actor_gradients = tf.gradients(ys = self.model.output, xs = self.weights, grad_ys = -self.action_gradient) # -action_gradient to use gradient ascend. instead of gradient descend.
+
         self.gradients = tf.gradients(ys=self.model.output, xs=self.weights,
                                                          grad_ys=-self.action_gradient)  # -action_gradient to use gradient ascend. instead of gradient descend.
+
         self.normalized_gradients = list(map(lambda x: tf.div(x, self.BATCH_SIZE), self.gradients))
 
         self.accumulated_gradients = [tf.Variable(tf.zeros_like(tv.initialized_value()),

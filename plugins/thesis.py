@@ -178,6 +178,7 @@ def preupdate():
 
     # Check if all aircraft in simulation landed and there are no more scenario commands left
     if (env.get_done() and len(stack.get_scendata()[0])==0) or collision or env.step_num>170:
+        print(env.get_done(), len(stack.get_scendata()[0]), collision, env.step_num>170)
         # Reset environment states and agent states
         if env.episode % 50==0:
             agent.save_models(env.episode)
@@ -310,7 +311,7 @@ class Environment:
         los_reward = np.zeros(reached_reward.shape)
         forward_reward = np.zeros(reached_reward.shape)
         # forward_reward[np.where(self.observation[:,4]<self.prev_observation[:,4])[0]] = 0.02
-        forward_reward = 0.2 - 0.4 * degtoqdr180(traf.hdg, self.qdr) / 180
+        forward_reward = 0.2 - 0.4 * np.abs(degtoqdr180(traf.hdg, self.qdr)) / 180
         # print('obs', self.observation[:,3], traf.hdg, self.observation[:,3]*180)
 
 
@@ -321,8 +322,8 @@ class Environment:
             for i in idx:
                 los_reward[i] = los_reward[i] - 5
         self.reward = np.asarray(reached_reward + global_reward + los_reward + forward_reward).reshape((reached_reward.shape[0],1))
-        self.reward = np.asarray(reached_reward + global_reward + los_reward ).reshape((reached_reward.shape[0],1))
-        print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward, (np.abs(self.qdr - degto180(traf.hdg)) % 180))
+        # self.reward = np.asarray(reached_reward + global_reward + los_reward ).reshape((reached_reward.shape[0],1))
+        # print('reward', self.reward, 'r_rew', reached_reward, 'glob', global_reward, 'los', los_reward , 'forw',  forward_reward, (np.abs(self.qdr - degto180(traf.hdg)) % 180))
 
     def generate_observation_continuous(self):
         """ Generate observation of size N_aircraft x state_size"""
@@ -346,9 +347,10 @@ class Environment:
 
         obs = np.array([normalize(traf.lat, minlat, maxlat),
                         normalize(traf.lon, minlon, maxlon),
-                        degtoqdr180(traf.hdg, qdr),
+                        degtoqdr180(traf.hdg, qdr)/180.,
                         normalize(dist, 0, self.dist_scale)
                         ]).transpose()
+        # print('obs', degtoqdr180(traf.hdg, qdr)/180.)
         return obs
 
     def generate_shared_observation(self):
@@ -420,7 +422,7 @@ class Environment:
             # dist = obs[0][:, :, 4]*self.dist_scale
             dist = np.asarray(self.dist) #(obs[:,:,4]+1)/2 * self.dist_scale
             dist_lim = 10
-            print(np.where(np.abs(dist-dist_lim/2)<dist_lim/2))
+            # print(np.where(np.abs(dist-dist_lim/2)<dist_lim/2))
             dist_idx = np.where(np.abs(dist-dist_lim/2)<dist_lim/2)[0]
 
 
@@ -919,24 +921,28 @@ class Agent:
 
         # Exploration noise is added only when no test episode is running
         # print('OU', self.OU())
-        annealing_factor = 1
+        annealing_factor = 1.
         if self.summary_counter > 1000:
             annealing_factor = 1 - 0.0003 * self.summary_counter
-            annealing_factor = np.max(annealing_factor, 0.15)
+            annealing_factor = np.max([annealing_factor, 0.15])
 
         noise = self.OU()[0:n_aircraft].reshape(self.action.shape)
         # print(not self.summary_counter % CONF.test_freq, not self.train_indicator)
-        print('action', self.action)
-        print('noise', noise)
-        if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
-            # Add exploration noise and clip to range [-1, 1] for action space
+        # print('action', self.action)
+        # print('noise', noise)
 
-            self.action = self.action + noise * annealing_factor
-            # print('noise', noise, self.action)
+        # if not self.summary_counter % CONF.test_freq == 0 or not self.train_indicator:
+        if self.train_indicator:
+            if not self.summary_counter % CONF.test_freq == 0:
 
-            self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
-            self.action = np.minimum(np.ones(self.action.shape), self.action)
-            # print('action', self.action)
+                # Add exploration noise and clip to range [-1, 1] for action space
+
+                self.action = self.action + noise * annealing_factor
+                # print('noise', noise, self.action)
+
+                self.action = np.maximum(-1*np.ones(self.action.shape), self.action)
+                self.action = np.minimum(np.ones(self.action.shape), self.action)
+                # print('action', self.action)
 
         # Apply Bell curve here to sample from to get action values
         # mu = 0
@@ -971,7 +977,7 @@ class Agent:
 
         # print("maxa {},\n dhdg {},\n qdr {},\n, , \n hdg1 {}\n, hdg2{}, \ntarget_hdg\n{}".format(max_angle, dheading, qdr, traf.hdg, heading, qdr180todeg(heading, qdr)))
         heading = qdr180todeg(heading, qdr)
-        print('HEADING', heading)
+        # print('HEADING', heading)
         return heading.ravel()[0:n_aircraft]
 
 

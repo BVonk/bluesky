@@ -11,6 +11,7 @@ def apply_mask(data):
     data = data[1]
     return tf.where(mask, data, tf.zeros_like(data))
 
+
 def bidirectional_layer(inputs):
     data = inputs[0]
     print(data.shape)
@@ -27,6 +28,7 @@ def bidirectional_layer(inputs):
                                           dtype=tf.float32)
     out = tf.add(output[0], output[1])
     return out
+
 
 def bidirectional_layer1(inputs):
     data = inputs[0]
