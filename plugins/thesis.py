@@ -26,6 +26,7 @@ import keras.backend as K
 import tensorflow as tf
 from shutil import copyfile
 from copy import deepcopy
+import random
 # from keras.backend import manual_variable_initialization
 # manual_variable_initialization(True)
 
@@ -173,14 +174,14 @@ def preupdate():
         action = agent.act(new_state)
         env.action_command(action)
 
-    if collision:
-        agent.cum_reward = -200
+    # if collision:
+    #     agent.cum_reward = -200
 
     # Check if all aircraft in simulation landed and there are no more scenario commands left
-    if (env.get_done() and len(stack.get_scendata()[0])==0) or collision or env.step_num>170:
+    if (env.get_done() and len(stack.get_scendata()[0])==0) or collision  or env.step_num>200:
         print(env.get_done(), len(stack.get_scendata()[0]), collision, env.step_num>170)
         # Reset environment states and agent states
-        if env.episode % 50==0:
+        if env.episode % CONF.test_freq==0:
             agent.save_models(env.episode)
         env.reset()
         agent.reset()
@@ -287,15 +288,10 @@ class Environment:
                     mask[idx, :, :] = 0
                     if idx == 0 and mask.shape[1]==0:
                         mask[:,:,:] = 0
-                    elif idx == 0:
-                        mask[idx:, idx, :] = 0
-                    elif idx == mask.shape[1]:
-                        mask[:idx, idx - 1, :] = 0
                     else:
-                        mask[:idx, idx - 1, :] = 0
-                        mask[idx:, idx, :] = 0
+                        mask[:, idx, :] = 0
 
-                self.observation[1] = self.observation[1][mask].reshape((traf.ntraf - len(done_idx), traf.ntraf - len(done_idx) - 1, self.shared_state_size))
+                self.observation[1] = self.observation[1][mask].reshape((traf.ntraf - len(done_idx), traf.ntraf - len(done_idx), self.shared_state_size))
         else:
             self.observation = np.delete(self.observation, done_idx, 0)
         self.dist = np.delete(self.dist, done_idx)
@@ -306,12 +302,12 @@ class Environment:
 
     def generate_reward(self):
         """ Generate reward scalar for each aircraft"""
-        global_reward = -0.05
+        global_reward = -0.1
         reached_reward = self.done * 10
         los_reward = np.zeros(reached_reward.shape)
         forward_reward = np.zeros(reached_reward.shape)
         # forward_reward[np.where(self.observation[:,4]<self.prev_observation[:,4])[0]] = 0.02
-        forward_reward = 0.2 - 0.4 * np.abs(degtoqdr180(traf.hdg, self.qdr)) / 180
+        forward_reward = 0.1 - 0.2 * np.abs(degtoqdr180(traf.hdg, self.qdr)) / 180
         # print('obs', self.observation[:,3], traf.hdg, self.observation[:,3]*180)
 
 
@@ -327,8 +323,6 @@ class Environment:
 
     def generate_observation_continuous(self):
         """ Generate observation of size N_aircraft x state_size"""
-
-
         minlat, maxlat = 50.75428888888889, 55.
         minlon, maxlon = 2., 7.216944444444445
         destidx = navdb.getaptidx('EHAM')
@@ -363,20 +357,22 @@ class Environment:
         minlat, maxlat = 50.75428888888889, 55.
         minlon, maxlon = 2., 7.216944444444445
         # Generate distance matrix
-        dist, qdr = qdrdist_matrix(np.mat(traf.lat), np.mat(traf.lon), np.mat(traf.lat), np.mat(traf.lon))
-        dist, qdr = np.array(dist), np.array(qdr)
-        shared_obs = np.zeros((traf.ntraf, traf.ntraf - 1, self.shared_state_size))
+        qdr, dist = qdrdist_matrix(np.mat(traf.lat), np.mat(traf.lon), np.mat(traf.lat), np.mat(traf.lon))
+        qdr, dist = np.array(qdr), np.array(dist)
+        shared_obs = np.zeros((traf.ntraf, traf.ntraf, self.shared_state_size))
+
+        destidx = navdb.getaptidx('EHAM')
+        lat, lon = navdb.aptlat[destidx], navdb.aptlon[destidx]
+        qdr1, dist1 = qdrdist(traf.lat, traf.lon, lat * np.ones(traf.lat.shape), lon * np.ones(traf.lon.shape))
         for i in range(traf.ntraf):
             # shared_obs = np.zeros((traf.ntraf - 1, self.shared_state_size))
-            shared_obs[i, :, 0] = np.delete(normalize(dist[i,:], 0, 200), i, 0)
-            shared_obs[i, :, 1] = np.delete(normalize(qdr[i,:]+180, 0, 360), i, 0)  # divide by 180
-            shared_obs[i, :, 2] = np.delete(normalize(traf.lat, minlat, maxlat), i)
-            shared_obs[i, :, 3] = np.delete(normalize(traf.lon, minlon, maxlon), i)
-            shared_obs[i, :, 4] = np.delete(traf.hdg/360., i)     # divide by 180
-            shared_obs[i, :, 5] = np.delete(normalize(traf.cas, 75, 200), i)
+            shared_obs[i, :, 0] = normalize(dist[i,:], 0, 200)
+            shared_obs[i, :, 1] = degtoqdr180(traf.hdg, qdr1)/180.  # divide by 180
+            shared_obs[i, :, 2] = normalize(traf.lat, minlat, maxlat)
+            shared_obs[i, :, 3] = normalize(traf.lon, minlon, maxlon)
 
-        if traf.ntraf==1:
-            shared_obs = np.zeros((traf.ntraf+1, traf.ntraf, self.shared_state_size))
+        # if traf.ntraf==1:
+        #     shared_obs = np.zeros((traf.ntraf+1, traf.ntraf, self.shared_state_size))
         # print('shard_obs', shared_obs.shape)
         return shared_obs
 
@@ -493,7 +489,35 @@ class Environment:
         self.los_pairs = []
         self.step_num = 0
 
-        stack.stack('open ./scenario/bart/{}'.format(self.scn))
+
+        if not CONF.train_bool:
+            scenarios = list(os.walk('./scenario/Bart/multi/test/'))
+            if (self.episode - int(CONF.load_ep)) == len(scenarios[0][-1]):
+                exit()
+
+            self.scn = scenarios[0][-1][self.episode-int(CONF.load_ep)]
+            stack.stack('open ./scenario/Bart/multi/test/{}'.format(self.scn))
+
+        # if env.episode<100:
+        #     scenarios = list(os.walk('./scenario/Bart/multi/easy/'))
+        #     self.scn = random.choice(scenarios[0][-1])
+        #     stack.stack('open ./scenario/Bart/multi/easy/{}'.format(self.scn))
+        #
+        # elif env.episode<250:
+        #     scenarios = list(os.walk('./scenario/Bart/multi/medium/'))
+        #     self.scn = random.choice(scenarios[0][-1])
+        #     stack.stack('open ./scenario/Bart/multi/medium/{}'.format(self.scn))
+        #
+        # else:
+        #     scenarios = list(os.walk('./scenario/Bart/multi/hard/'))
+        #     self.scn = random.choice(scenarios[0][-1])
+        #     stack.stack('open ./scenario/Bart/multi/hard/{}'.format(self.scn))
+
+        scenarios = list(os.walk('./scenario/Bart/formations/'))
+        self.scn = random.choice(scenarios[0][-1])
+        stack.stack('open ./scenario/Bart/formations/{}'.format(self.scn))
+
+        # stack.stack('open ./scenario/bart/{}'.format(self.scn))
         # load_routes()
 
     def get_done(self):
@@ -526,6 +550,7 @@ class Agent:
         self.actor_learning_rate = actor_lr
         self.loss = 0
         self.cum_reward=0
+        self.step=0
         self.memory_size = memory_size
         self.max_agents = max_agents
         self.OU = OrnsteinUhlenbeckActionNoise(np.zeros(self.max_agents), sigma=sigma, theta=theta, dt=dt)
@@ -546,6 +571,7 @@ class Agent:
         config.gpu_options.allow_growth = True
         config.allow_soft_placement = True
         self.sess = tf.Session(config=config)
+        tf.set_random_seed(1)
         K.set_session(self.sess)
 
 
@@ -607,38 +633,45 @@ class Agent:
     def pad_nines(self, array, max_timesteps):
         """Pad -999 for shared observations sequences"""
         # print("array shape", array.shape)
-        zeros = -999.0 * np.ones((max_timesteps, max_timesteps - 1, array.shape[-1]))
+        zeros = -999.0 * np.ones((max_timesteps, max_timesteps, array.shape[-1]))
         if len(array.shape)==4:
             array=array.reshape((array.shape[1:]))
         zeros[0:array.shape[0], 0:array.shape[1], :] = array
         # print('shapeshape', array.shape)
-        return zeros.reshape(max_timesteps*(max_timesteps-1), array.shape[2])
+        return zeros.reshape(max_timesteps*(max_timesteps), array.shape[2])
 
     def build_summaries(self):
         episode_reward = tf.Variable(0., name="Episode_reward")
+        episode_length = tf.Variable(0., name="Episode_length")
         # loss = tf.Variable(0., name="critic_loss")
         # tf.summary.scalar("Critic_loss", loss)
         tf.summary.scalar("Reward", episode_reward)
-        summary_vars = [episode_reward]# , episode_ave_max_q]
+        tf.summary.scalar("Length", episode_length)
+        summary_vars = [episode_reward, episode_length]# , episode_ave_max_q]
         summary_ops = tf.summary.merge_all()
 
         test_reward = tf.Variable(0.)
-        summary_ops_test = tf.summary.scalar("Test_reward", test_reward)
-        summary_vars_test = [test_reward]
+        test_length = tf.Variable(0.)
+        summary_reward_test = tf.summary.scalar("Test_reward", test_reward)
+        summary_step_test = tf.summary.scalar("Test_length", test_length)
+        summary_ops_test = tf.summary.merge([summary_reward_test, summary_step_test])
+        summary_vars_test = [test_reward, test_length]
         # summary_ops_test = tf.summary.tensor_summary('test', test_reward)
         return summary_ops, summary_vars, summary_ops_test, summary_vars_test
 
-    def write_train_summaries(self, reward):
+    def write_train_summaries(self, reward, length):
         summary_str = self.sess.run(self.summary_ops, feed_dict={
             self.summary_vars[0]: np.sum(reward),
+            self.summary_vars[1]: length,
                     })
         self.writer.add_summary(summary_str, self.summary_counter)
         self.writer.flush()
         self.summary_counter += 1
 
-    def write_test_summaries(self, reward):
+    def write_test_summaries(self, reward, length):
         summary_str = self.sess.run(self.summary_ops_test, feed_dict={
             self.summary_vars_test[0]: np.sum(reward),
+            self.summary_vars_test[1]: length
         })
         self.writer.add_summary(summary_str, self.summary_counter)
         self.writer.flush()
@@ -682,7 +715,7 @@ class Agent:
 
     def preprocess_batch_shared(self):
         """
-        Unpack the batch into format that is workable for tensorflow models for a nshared observation bicnet model
+        Unpack the batch into format that is workable for tensorflow models for a shared observation bicnet model
         :return:
         """
         batch = self.replay_memory.getBatch(self.batch_size)
@@ -777,8 +810,10 @@ class Agent:
             # print('grads', len(grads[0]), grads[0])
             self.critic.train(states, actions, y_t)
             self.actor.train(states, grads)
-            self.actor.update_target_network()
-            self.critic.update_target_network()
+
+            if self.summary_counter%100:
+                self.actor.update_target_network()
+                self.critic.update_target_network()
 
 
     def update_replay_memory(self, state, reward, done, new_state):
@@ -860,7 +895,7 @@ class Agent:
             if len(state_copy[1].shape)==2:
                 state_copy[1] = np.expand_dims(state_copy[1], axis=0)
             obs = state_copy[0]
-            state_copy[1] = state[1].reshape(1, n_aircraft * (n_aircraft - 1), state[1].shape[-1])
+            state_copy[1] = state[1].reshape(1, n_aircraft * n_aircraft, state[1].shape[-1])
         else:
             n_aircraft = int(np.prod(state.shape)/self.state_size)
             if len(state_copy.shape)==2:
@@ -1055,17 +1090,18 @@ class Agent:
 
     def update_cum_reward(self, reward):
         # print(reward)
-        self.cum_reward -= 1
+        # self.cum_reward -= 1
+        self.cum_reward += np.mean(reward)
         # self.cum_reward = 4 - len(reward)
+        self.step += 1
 
-        pass
-        # self.cum_reward += reward
+
 
     def reset(self):
         if self.summary_counter%CONF.test_freq == 0:
-            self.write_test_summaries(self.cum_reward)
+            self.write_test_summaries(self.cum_reward, self.step)
         else:
-            self.write_train_summaries(self.cum_reward)
+            self.write_train_summaries(self.cum_reward, self.step)
         print("Episode {}, Score {}".format(self.summary_counter, self.cum_reward))
         if self.summary_counter % CONF.test_freq == 0:
             print("Starting test run at Episode {}".format(self.summary_counter+1))
@@ -1073,6 +1109,7 @@ class Agent:
             # print("Start training Episode {}".format(self.summary_counter))
 
         self.cum_reward = 0
+        self.step = 0
         # self.ac_dict={}
 
 
