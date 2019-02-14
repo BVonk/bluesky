@@ -1,5 +1,5 @@
 from keras.models import Model
-from keras.layers import Dense, Input, TimeDistributed, Bidirectional, LSTM, Concatenate, Masking, Activation, Multiply, Lambda, Reshape
+from keras.layers import Dense, Input, TimeDistributed, Bidirectional, LSTM, Concatenate, Masking, Activation, Multiply, Lambda, Reshape, SimpleRNN
 from keras.optimizers import Adam
 # from custom_keras_layers import ZeroMaskedEntries
 from plugins.ml.custom_keras_layers import ZeroMaskedEntries
@@ -55,6 +55,7 @@ class BiCNet:
         mask = Masking(mask_value=0., name='sequence_masking')(S)
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
+        h1 = Bidirectional(SimpleRNN(H2, return_sequences=True), name='brnn')(h0)
 
         # backward = LSTM(hidden_size, return_sequences=True)(h0)
         # forward = LSTM(hidden_size, return_sequences=True)(h0)
@@ -151,8 +152,8 @@ class BiCNet:
         # reshaped = Reshape([tf.shape(S2)[1] * tf.shape(S2)[2], S2.shape[3].value], name="shared_reshape")(S2)
         # reshaped = Lambda(reshape_input, name="shared_reshape")(S2)
         mask = Masking(mask_value=-999., name = 'shared_mask')(S2)
-        layer1 = TimeDistributed(Dense(12, activation='relu'), name='shared_TD1')(mask)
-        layer2 = TimeDistributed(Dense(12, activation='linear'), name='shared_TD2')(layer1)
+        layer1 = TimeDistributed(Dense(32, activation='relu'), name='shared_TD1')(mask)
+        layer2 = TimeDistributed(Dense(32, activation='linear'), name='shared_TD2')(layer1)
         layer3 = Lambda(remove_mask, name='remove_mask')(layer2)
         # layer4 = Reshape((S2.shape[1].value, S2.shape[2].value, layer3.shape[2].value), name='reshape')(layer3)
         layer5 = Lambda(max_pool_sequence, name='max_pool')(layer3)
@@ -164,18 +165,27 @@ class BiCNet:
         mask = Masking(mask_value=0., name = 'merged_mask')(M)
         # print("Hallo kunnen jullie mij horen!", S1_preprocessed.shape, S2_preprocessed.shape)
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
-        h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
-        h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
-        h3c = Activation('tanh', name='tanh')(h2)
-        out = h3c
+        h1 = Bidirectional(SimpleRNN(H2, return_sequences=True), name='brnn')(h0)
+
+        # backward = LSTM(hidden_size, return_sequences=True)(h0)
+        # forward = LSTM(hidden_size, return_sequences=True)(h0)
+        #
+        # def reverse_func(x, mask=None):
+        #     return tf.reverse(x, [False, True, False])
+        #
+        # h1 = Lambda(bidirectional_layer, name='bidirectional_layer')([h0, seq_l])
+        # h1 = bidirectional_layer([h0, seq_l])
+        # h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
+        h2 = TimeDistributed(Dense(act_dim, activation='tanh'), name='post_brnn')(h1)
+        out = h2
         model = Model(inputs=[S1, S2], outputs=out)
         layers = model.layers
-        # with tf.name_scope(name):
-        #     for layer in layers:
-        #         with tf.name_scope(layer.name):
-        #             for weight in layer.weights:
-        #                 layer_name = weight.name.split('/')[-1]
-        #                 tf.summary.histogram(layer_name, weight)
+        with tf.name_scope(name):
+            for layer in layers:
+                with tf.name_scope(layer.name):
+                    for weight in layer.weights:
+                        layer_name = weight.name.split('/')[-1]
+                        tf.summary.histogram(layer_name, weight)
 
         return model, model.trainable_weights, model.output, S1, S2
 
@@ -191,6 +201,7 @@ class BiCNet:
         mask = Masking(mask_value=0.)(M)
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
         h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
+        h1 = Bidirectional(SimpleRNN(H2, return_sequences=True), name='brnn')(h0)
         h2 = TimeDistributed(Dense(1, activation='linear'), name='post_brnn')(h1)
 
         h4 = TimeDistributed(ZeroMaskedEntries(name='zeromasked'))(h2)
@@ -224,8 +235,8 @@ class BiCNet:
         # reshaped = Reshape([tf.shape(S2)[1] * tf.shape(S2)[2], S2.shape[3].value], name="shared_reshape")(S2)
         # reshaped = Lambda(reshape_input, name="shared_reshape")(S2)
         mask = Masking(mask_value=-999., name = 'shared_mask')(S2)
-        layer1 = TimeDistributed(Dense(12, activation='relu'), name='shared_TD1')(mask)
-        layer2 = TimeDistributed(Dense(12, activation='linear'), name='shared_TD2')(layer1)
+        layer1 = TimeDistributed(Dense(32, activation='relu'), name='shared_TD1')(mask)
+        layer2 = TimeDistributed(Dense(32, activation='linear'), name='shared_TD2')(layer1)
         layer3 = Lambda(remove_mask, name='remove_mask')(layer2)
         # layer4 = Reshape((S2.shape[1].value, S2.shape[2].value, layer3.shape[2].value), name='post_reshape')(layer3)
         layer5 = Lambda(max_pool_sequence, name='max_pool')(layer3)
@@ -239,19 +250,21 @@ class BiCNet:
         # Set the masking value to ignore 0 padded sequence inputs.
         mask = Masking(mask_value=0., name='input_mask')(M)
         h0 = TimeDistributed(Dense(H1, activation='relu'), name='pre_brnn')(mask)
-        h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
-        h2 = TimeDistributed(Dense(1, activation='linear'), name='post_brnn')(h1)
+        # h1 = Bidirectional(LSTM(H2, return_sequences=True), name='brnn')(h0)
+        h1 = Bidirectional(SimpleRNN(H2, return_sequences=True), name='brnn')(h0)
+        h2 = TimeDistributed(Dense(act_dim, activation='linear'), name='post_brnn')(h1)
         out = h2
+        # h3c = Activation('tanh', name='tanh')(h2)
         model = Model(inputs=[S1, S2 ,A], outputs=out)
         adam = Adam(lr=LR)
         model.compile(loss='mse', optimizer=adam)
         layers = model.layers
-        # with tf.name_scope(name):
-        #     for layer in layers:
-        #         with tf.name_scope(layer.name):
-        #             for weight in layer.weights:
-        #                 layer_name = weight.name.split('/')[-1]
-        #                 tf.summary.histogram(layer_name, weight)
+        with tf.name_scope(name):
+            for layer in layers:
+                with tf.name_scope(layer.name):
+                    for weight in layer.weights:
+                        layer_name = weight.name.split('/')[-1]
+                        tf.summary.histogram(layer_name, weight)
 
 
         return model, model.output, A, S1, S2
@@ -297,6 +310,7 @@ def max_pool_sequence(x):
     # tf.shape(x) returns the dynamic shape, where x.shape returns the static shape at the moment the graph is build
 
     # Compute number of aircraft
+    """
     zero = tf.constant(0, dtype=tf.float32)
     y = tf.maximum(tf.constant(1, dtype=tf.int32), tf.shape(x)[1])
     one = tf.Variable(1, dtype=tf.float32, trainable=False)
@@ -306,7 +320,11 @@ def max_pool_sequence(x):
     add = tf.add(one, tf.multiply(four, tf.cast(y, tf.float32)))
     sqrt = tf.sqrt(add)
     n_aircraft = tf.divide(tf.add(minone, sqrt), two)
+    
+    shape = tf.shape(x)[1]
+    n_aircraft = tf.sqrt(shape)
 
+    
     # Max pool
     mask = tf.equal(x, zero)
     index = tf.where(mask)
@@ -323,7 +341,12 @@ def max_pool_sequence(x):
                          tf.maximum(tf.constant(1, dtype=tf.int32),tf.cast(n_aircraft, tf.int32)),
                          x.shape[-1]],
                     name='reshape_x1')
-    max_pool = tf.reduce_max(x2, axis=2, keepdims=False)
+                    
+    """
+    n_aircraft = tf.sqrt(tf.cast(tf.shape(x)[1], tf.float32))
+    x_reshaped = tf.reshape(x, [tf.shape(x)[0], tf.cast(n_aircraft, tf.int32), tf.cast(n_aircraft, tf.int32), x.shape[-1]],
+                            name='reshape_shared')
+    max_pool = tf.reduce_max(x_reshaped, axis=2, keepdims=False)
 
     return max_pool
 
