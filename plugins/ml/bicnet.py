@@ -153,8 +153,8 @@ class BiCNet:
         # reshaped = Lambda(reshape_input, name="shared_reshape")(S2)
         mask = Masking(mask_value=-999., name = 'shared_mask')(S2)
         layer1 = TimeDistributed(Dense(32, activation='relu'), name='shared_TD1')(mask)
-        layer2 = TimeDistributed(Dense(32, activation='linear'), name='shared_TD2')(layer1)
-        layer3 = Lambda(remove_mask, name='remove_mask')(layer2)
+        # layer2 = TimeDistributed(Dense(32, activation='linear'), name='shared_TD2')(layer1)
+        layer3 = Lambda(remove_mask, name='remove_mask')(layer1)
         # layer4 = Reshape((S2.shape[1].value, S2.shape[2].value, layer3.shape[2].value), name='reshape')(layer3)
         layer5 = Lambda(max_pool_sequence, name='max_pool')(layer3)
         S2_preprocessed = layer5
@@ -236,8 +236,8 @@ class BiCNet:
         # reshaped = Lambda(reshape_input, name="shared_reshape")(S2)
         mask = Masking(mask_value=-999., name = 'shared_mask')(S2)
         layer1 = TimeDistributed(Dense(32, activation='relu'), name='shared_TD1')(mask)
-        layer2 = TimeDistributed(Dense(32, activation='linear'), name='shared_TD2')(layer1)
-        layer3 = Lambda(remove_mask, name='remove_mask')(layer2)
+        #layer2 = TimeDistributed(Dense(32, activation='linear'), name='shared_TD2')(layer1)
+        layer3 = Lambda(remove_mask, name='remove_mask')(layer1)
         # layer4 = Reshape((S2.shape[1].value, S2.shape[2].value, layer3.shape[2].value), name='post_reshape')(layer3)
         layer5 = Lambda(max_pool_sequence, name='max_pool')(layer3)
         S2_preprocessed = layer5

@@ -310,13 +310,16 @@ class CriticNetwork_shared_obs(object):
         return self.target_model.predict([states[0], states[1], actions])
 
 
+    # def update_target_network(self):
+    #     critic_weights = self.model.get_weights()
+    #     critic_target_weights = self.target_model.get_weights()
+    #     for i in np.arange(len(critic_weights)):
+    #         critic_target_weights[i] = self.TAU * critic_weights[i] + (1 - self.TAU)* critic_target_weights[i]
+    #     self.target_model.set_weights(critic_target_weights)
+
     def update_target_network(self):
         critic_weights = self.model.get_weights()
-        critic_target_weights = self.target_model.get_weights()
-        for i in np.arange(len(critic_weights)):
-            critic_target_weights[i] = self.TAU * critic_weights[i] + (1 - self.TAU)* critic_target_weights[i]
-        self.target_model.set_weights(critic_target_weights)
-
+        self.target_model.set_weights(critic_weights)
 
 if __name__ == '__main__':
     sess = tf.Session()
