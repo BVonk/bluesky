@@ -79,8 +79,7 @@ def degtopi(deg):
 
 
 
-def heatmap(path, episode, out, offset):
-
+def heatmap(path, episode, out):
 
 
     actormodel = os.path.join(path, 'actor_model{0:05d}.yaml'.format(episode))
@@ -108,7 +107,12 @@ def heatmap(path, episode, out, offset):
     ehamlon = 4 + 45/60. + 85/3600.
 
 
-    hdgdiff = offset #15
+    sns.set_context("paper")
+    fig, ax = plt.subplots(1,3)
+
+    for i in range(3):
+
+    hdgdiff = -10 + 10*i  #offset #15
     n = 1000
     ehamlat = 52 + 18/60. + 48/3600.
     ehamlon = 4 + 45/60. + 85/3600.

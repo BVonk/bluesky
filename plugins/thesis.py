@@ -491,12 +491,16 @@ class Environment:
 
 
         if not CONF.train_bool:
-            scenarios = list(os.walk('./scenario/Bart/multi/test/'))
+            scenarios = list(os.walk('./scenario/Bart/test/'))
             if (self.episode - int(CONF.load_ep)) == len(scenarios[0][-1]):
                 exit()
 
             self.scn = scenarios[0][-1][self.episode-int(CONF.load_ep)]
-            stack.stack('open ./scenario/Bart/multi/test/{}'.format(self.scn))
+            print('episode', self.episode-int(CONF.load_ep))
+            stack.stack('open ./scenario/Bart/test/{}'.format(self.scn))
+
+
+
 
         # if env.episode<100:
         #     scenarios = list(os.walk('./scenario/Bart/multi/easy/'))
@@ -512,10 +516,10 @@ class Environment:
         #     scenarios = list(os.walk('./scenario/Bart/multi/hard/'))
         #     self.scn = random.choice(scenarios[0][-1])
         #     stack.stack('open ./scenario/Bart/multi/hard/{}'.format(self.scn))
-
-        scenarios = list(os.walk('./scenario/Bart/formations/'))
-        self.scn = random.choice(scenarios[0][-1])
-        stack.stack('open ./scenario/Bart/formations/{}'.format(self.scn))
+        else:
+            scenarios = list(os.walk('./scenario/Bart/formations/'))
+            self.scn = random.choice(scenarios[0][-1])
+            stack.stack('open ./scenario/Bart/formations/{}'.format(self.scn))
 
         # stack.stack('open ./scenario/bart/{}'.format(self.scn))
         # load_routes()

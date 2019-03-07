@@ -343,6 +343,7 @@ def max_pool_sequence(x):
                     name='reshape_x1')
                     
     """
+    import tensorflow as tf
     n_aircraft = tf.sqrt(tf.cast(tf.shape(x)[1], tf.float32))
     x_reshaped = tf.reshape(x, [tf.shape(x)[0], tf.cast(n_aircraft, tf.int32), tf.cast(n_aircraft, tf.int32), x.shape[-1]],
                             name='reshape_shared')

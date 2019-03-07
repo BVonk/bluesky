@@ -46,6 +46,8 @@ sdist/
 var/
 tmp/
 output/
+scenario/Bart/
+plugins/ml/scen/
 *.egg-info/
 .installed.cfg
 *.egg

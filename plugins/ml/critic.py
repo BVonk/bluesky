@@ -321,6 +321,13 @@ class CriticNetwork_shared_obs(object):
         critic_weights = self.model.get_weights()
         self.target_model.set_weights(critic_weights)
 
+
+    def load_weights(self, filepath):
+        self.model.load_weights(filepath, by_name=False)
+
+    def load_target_weights(self, filepath):
+        self.target_model.load_weights(filepath, by_name=False)
+
 if __name__ == '__main__':
     sess = tf.Session()
     critic = CriticNetwork(sess, 10, 5, 20, 32, 0.9, 0.0001)

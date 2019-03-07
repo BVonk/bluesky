@@ -278,6 +278,13 @@ class ActorNetwork_shared_obs(object):
         actor_weights = self.model.get_weights()
         self.target_model.set_weights(actor_weights)
 
+
+    def load_weights(self, filepath):
+        self.model.load_weights(filepath, by_name=False)
+
+    def load_target_weights(self, filepath):
+        self.target_model.load_weights(filepath, by_name=False)
+
     def predict(self, inputs):
         return self.model.predict(inputs)
 
